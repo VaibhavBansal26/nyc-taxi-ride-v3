@@ -1,0 +1,8 @@
+confluent-kafka
+hopsworks==4.1.5
+packaging
+pandas
+pyarrow
+python-dotenv
+requests
+scikit-learn==1.5.2
