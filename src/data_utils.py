@@ -553,64 +553,6 @@ def split_time_series_data(
     return X_train, y_train, X_test, y_test
 
 
-# def fetch_batch_raw_data(
-#     from_date: Union[datetime, str], to_date: Union[datetime, str]
-# ) -> pd.DataFrame:
-#     """
-#     Simulate production data by sampling historical data from 52 weeks ago (i.e., 1 year).
-
-#     Args:
-#         from_date (datetime or str): The start date for the data batch.
-#         to_date (datetime or str): The end date for the data batch.
-
-#     Returns:
-#         pd.DataFrame: A DataFrame containing the simulated production data.
-#     """
-#     # Convert string inputs to datetime if necessary
-#     if isinstance(from_date, str):
-#         from_date = datetime.fromisoformat(from_date)
-#     if isinstance(to_date, str):
-#         to_date = datetime.fromisoformat(to_date)
-
-#     # Validate input dates
-#     if not isinstance(from_date, datetime) or not isinstance(to_date, datetime):
-#         raise ValueError(
-#             "Both 'from_date' and 'to_date' must be datetime objects or valid ISO format strings."
-#         )
-#     if from_date >= to_date:
-#         raise ValueError("'from_date' must be earlier than 'to_date'.")
-
-#     # Shift dates back by 52 weeks (1 year)
-#     historical_from_date = from_date - timedelta(weeks=52)
-#     historical_to_date = to_date - timedelta(weeks=52)
-
-#     # Load and filter data for the historical period
-#     rides_from = load_and_process_taxi_data(
-#         year=historical_from_date.year, months=[historical_from_date.month]
-#     )
-#     rides_from = rides_from[
-#         rides_from.pickup_datetime >= historical_from_date.to_datetime64()
-#     ]
-
-#     if historical_to_date.month != historical_from_date.month:
-#         rides_to = load_and_process_taxi_data(
-#             year=historical_to_date.year, months=[historical_to_date.month]
-#         )
-#         rides_to = rides_to[
-#             rides_to.pickup_datetime < historical_to_date.to_datetime64()
-#         ]
-#         # Combine the filtered data
-#         rides = pd.concat([rides_from, rides_to], ignore_index=True)
-#     else:
-#         rides = rides_from
-#     # Shift the data forward by 52 weeks to simulate recent data
-#     rides["pickup_datetime"] += timedelta(weeks=52)
-
-#     # Sort the data for consistency
-#     rides.sort_values(by=["pickup_location_id", "pickup_datetime"], inplace=True)
-
-#     return rides
-
 def fetch_batch_raw_data(
     from_date: Union[datetime, str], to_date: Union[datetime, str]
 ) -> pd.DataFrame:
@@ -624,61 +566,119 @@ def fetch_batch_raw_data(
     Returns:
         pd.DataFrame: A DataFrame containing the simulated production data.
     """
-    # Convert input dates to pandas Timestamps for robust handling
+    # Convert string inputs to datetime if necessary
     if isinstance(from_date, str):
-        from_date = pd.Timestamp(from_date)
-    else:
-        from_date = pd.Timestamp(from_date)
-        
+        from_date = datetime.fromisoformat(from_date)
     if isinstance(to_date, str):
-        to_date = pd.Timestamp(to_date)
-    else:
-        to_date = pd.Timestamp(to_date)
+        to_date = datetime.fromisoformat(to_date)
 
-    # Validate that from_date is earlier than to_date
+    # Validate input dates
+    if not isinstance(from_date, datetime) or not isinstance(to_date, datetime):
+        raise ValueError(
+            "Both 'from_date' and 'to_date' must be datetime objects or valid ISO format strings."
+        )
     if from_date >= to_date:
         raise ValueError("'from_date' must be earlier than 'to_date'.")
 
-    # Shift the date range back by 52 weeks (1 year)
-    historical_from_date = from_date - pd.Timedelta(weeks=52)
-    historical_to_date = to_date - pd.Timedelta(weeks=52)
+    # Shift dates back by 52 weeks (1 year)
+    historical_from_date = from_date - timedelta(weeks=52)
+    historical_to_date = to_date - timedelta(weeks=52)
 
-    # Generate a range of month start dates covering the historical period.
-    # We normalize the dates to ensure consistency.
-    months_range = pd.date_range(
-        start=historical_from_date.normalize().replace(day=1),
-        end=historical_to_date.normalize().replace(day=1),
-        freq='MS'
+    # Load and filter data for the historical period
+    rides_from = load_and_process_taxi_data(
+        year=historical_from_date.year, months=[historical_from_date.month]
     )
-
-    # Load data for each month in the range
-    monthly_data = []
-    for month_start in months_range:
-        year = month_start.year
-        month = month_start.month
-        # Assume load_and_process_taxi_data accepts a list of months.
-        rides = load_and_process_taxi_data(year=year, months=[month])
-        monthly_data.append(rides)
-
-    # Combine all the monthly data
-    if monthly_data:
-        rides = pd.concat(monthly_data, ignore_index=True)
-    else:
-        rides = pd.DataFrame()
-
-    # Filter data to include only rows within the historical period
-    rides = rides[
-        (rides.pickup_datetime >= pd.Timestamp(historical_from_date)) &
-        (rides.pickup_datetime < pd.Timestamp(historical_to_date))
+    rides_from = rides_from[
+        rides_from.pickup_datetime >= historical_from_date.to_datetime64()
     ]
 
-    # Shift the filtered data forward by 52 weeks to simulate current data
-    rides["pickup_datetime"] = rides["pickup_datetime"] + pd.Timedelta(weeks=52)
+    if historical_to_date.month != historical_from_date.month:
+        rides_to = load_and_process_taxi_data(
+            year=historical_to_date.year, months=[historical_to_date.month]
+        )
+        rides_to = rides_to[
+            rides_to.pickup_datetime < historical_to_date.to_datetime64()
+        ]
+        # Combine the filtered data
+        rides = pd.concat([rides_from, rides_to], ignore_index=True)
+    else:
+        rides = rides_from
+    # Shift the data forward by 52 weeks to simulate recent data
+    rides["pickup_datetime"] += timedelta(weeks=52)
 
     # Sort the data for consistency
     rides.sort_values(by=["pickup_location_id", "pickup_datetime"], inplace=True)
 
     return rides
+
+# def fetch_batch_raw_data(
+#     from_date: Union[datetime, str], to_date: Union[datetime, str]
+# ) -> pd.DataFrame:
+#     """
+#     Simulate production data by sampling historical data from 52 weeks ago (i.e., 1 year).
+
+#     Args:
+#         from_date (datetime or str): The start date for the data batch.
+#         to_date (datetime or str): The end date for the data batch.
+
+#     Returns:
+#         pd.DataFrame: A DataFrame containing the simulated production data.
+#     """
+#     # Convert input dates to pandas Timestamps for robust handling
+#     if isinstance(from_date, str):
+#         from_date = pd.Timestamp(from_date)
+#     else:
+#         from_date = pd.Timestamp(from_date)
+        
+#     if isinstance(to_date, str):
+#         to_date = pd.Timestamp(to_date)
+#     else:
+#         to_date = pd.Timestamp(to_date)
+
+#     # Validate that from_date is earlier than to_date
+#     if from_date >= to_date:
+#         raise ValueError("'from_date' must be earlier than 'to_date'.")
+
+#     # Shift the date range back by 52 weeks (1 year)
+#     historical_from_date = from_date - pd.Timedelta(weeks=52)
+#     historical_to_date = to_date - pd.Timedelta(weeks=52)
+
+#     # Generate a range of month start dates covering the historical period.
+#     # We normalize the dates to ensure consistency.
+#     months_range = pd.date_range(
+#         start=historical_from_date.normalize().replace(day=1),
+#         end=historical_to_date.normalize().replace(day=1),
+#         freq='MS'
+#     )
+
+#     # Load data for each month in the range
+#     monthly_data = []
+#     for month_start in months_range:
+#         year = month_start.year
+#         month = month_start.month
+#         # Assume load_and_process_taxi_data accepts a list of months.
+#         rides = load_and_process_taxi_data(year=year, months=[month])
+#         monthly_data.append(rides)
+
+#     # Combine all the monthly data
+#     if monthly_data:
+#         rides = pd.concat(monthly_data, ignore_index=True)
+#     else:
+#         rides = pd.DataFrame()
+
+#     # Filter data to include only rows within the historical period
+#     rides = rides[
+#         (rides.pickup_datetime >= pd.Timestamp(historical_from_date)) &
+#         (rides.pickup_datetime < pd.Timestamp(historical_to_date))
+#     ]
+
+#     # Shift the filtered data forward by 52 weeks to simulate current data
+#     rides["pickup_datetime"] = rides["pickup_datetime"] + pd.Timedelta(weeks=52)
+
+#     # Sort the data for consistency
+#     rides.sort_values(by=["pickup_location_id", "pickup_datetime"], inplace=True)
+
+#     return rides
 
 
 
