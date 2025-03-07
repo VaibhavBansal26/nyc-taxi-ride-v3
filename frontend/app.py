@@ -546,14 +546,10 @@ def visualize_predicted_demand(shapefile_path, predicted_demand):
     """
     Visualizes the predicted number of rides on a map of NYC taxi zones.
     """
-    # Load the shapefile and convert CRS to WGS84 (lat/lon)
     gdf = gpd.read_file(shapefile_path).to_crs("epsg:4326")
-
     if "LocationID" not in gdf.columns:
         raise ValueError("Shapefile must contain a 'LocationID' column to match taxi zones.")
-
     gdf["predicted_demand"] = gdf["LocationID"].map(predicted_demand).fillna(0)
-
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     gdf.plot(
         column="predicted_demand",
@@ -564,7 +560,6 @@ def visualize_predicted_demand(shapefile_path, predicted_demand):
         legend=True,
         legend_kwds={"label": "Predicted Rides", "orientation": "vertical"},
     )
-
     ax.set_title("Predicted NYC Taxi Rides by Zone", fontsize=16)
     ax.set_axis_off()
     st.pyplot(fig)
@@ -584,7 +579,6 @@ def create_taxi_map(shapefile_path, prediction_data):
     nyc_zones = nyc_zones.to_crs(epsg=4326)
 
     m = folium.Map(location=[40.7128, -74.0060], zoom_start=10, tiles="cartodbpositron")
-
     colormap = LinearColormap(
         colors=["#FFEDA0", "#FED976", "#FEB24C", "#FD8D3C", "#FC4E2A", "#E31A1C", "#BD0026"],
         vmin=nyc_zones["predicted_demand"].min(),
@@ -690,7 +684,7 @@ with st.spinner(text="Fetching predictions"):
     st.sidebar.write("Model was loaded from the registry")
     progress_bar.progress(3 / N_STEPS)
 
-# Convert pickup_hour to New York time if present
+# Convert pickup_hour to New York time if present in predictions
 if "pickup_hour" in predictions.columns:
     predictions["pickup_hour"] = pd.to_datetime(predictions["pickup_hour"], utc=True).dt.tz_convert("America/New_York")
 
@@ -698,9 +692,16 @@ if "pickup_hour" in predictions.columns:
 lookup_file = Path(__file__).parent.parent / "taxi_zone_lookup.csv"
 lookup_df = pd.read_csv(lookup_file)
 
-# Merge the lookup data to add a new "zone" column to the predictions
-# Adjust the column names if necessary. Here it is assumed that lookup_df contains
-# "LocationID" and "zone" columns.
+# Check for expected columns in the lookup DataFrame.
+# If the column "zone" is not present but "Zone" exists, rename it.
+if "zone" not in lookup_df.columns:
+    if "Zone" in lookup_df.columns:
+        lookup_df.rename(columns={"Zone": "zone"}, inplace=True)
+    else:
+        st.error("The lookup CSV file does not contain a 'zone' column. Found columns: " + ", ".join(lookup_df.columns))
+        st.stop()
+
+# Merge the lookup data to add a new "zone" column to the predictions.
 predictions = predictions.merge(
     lookup_df[["LocationID", "zone"]],
     left_on="pickup_location_id",
