@@ -17,6 +17,7 @@ MODELS_DIR = PARENT_DIR / "models"
 # Create directories if they don't exist
 for directory in [
     DATA_DIR,
+    LOOKUP_DIR,
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
     TRANSFORMED_DATA_DIR,
