@@ -307,6 +307,7 @@ from branca.colormap import LinearColormap
 from streamlit_folium import st_folium
 
 from src.config import DATA_DIR
+from src.config import LOOKUP_DIR
 from src.inference import fetch_next_hour_predictions, load_batch_of_features_from_store
 from src.plot_utils import plot_prediction
 
@@ -468,7 +469,7 @@ if "pickup_hour" in predictions.columns:
 
 # Merge in taxi zone lookup information to add a new "zone" column.
 # Adjust the file path if needed.
-lookup_file = "/mnt/taxi_zone_lookup.csv"
+lookup_file = LOOKUP_DIR / "taxi_zone_lookup.csv"
 lookup_df = pd.read_csv(lookup_file)
 # Assuming lookup_df has columns "LocationID" and "zone"
 predictions = predictions.merge(

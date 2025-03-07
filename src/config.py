@@ -8,6 +8,7 @@ load_dotenv()
 # Define directories
 PARENT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = PARENT_DIR / "data"
+LOOKUP_DIR = PARENT_DIR / "lookup"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 TRANSFORMED_DATA_DIR = DATA_DIR / "transformed"
