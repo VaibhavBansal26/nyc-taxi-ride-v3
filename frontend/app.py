@@ -468,7 +468,7 @@ if "pickup_hour" in predictions.columns:
 
 # Merge in taxi zone lookup information to add a new "zone" column.
 # Adjust the file path if needed.
-lookup_file = "/mnt/data/taxi_zone_lookup.csv"
+lookup_file = "/mnt/taxi_zone_lookup.csv"
 lookup_df = pd.read_csv(lookup_file)
 # Assuming lookup_df has columns "LocationID" and "zone"
 predictions = predictions.merge(
