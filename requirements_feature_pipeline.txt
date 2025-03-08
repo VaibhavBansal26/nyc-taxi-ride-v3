@@ -1,5 +1,5 @@
 confluent-kafka==2.8.0
-hopsworks==4.1.5
+hopsworks==4.1.8
 packaging
 pandas
 pyarrow
