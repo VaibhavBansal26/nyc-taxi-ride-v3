@@ -988,6 +988,8 @@
 
 import sys
 from pathlib import Path
+parent_dir = str(Path(__file__).parent.parent)
+sys.path.append(parent_dir)
 import zipfile
 import folium
 import geopandas as gpd
