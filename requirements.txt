@@ -10,7 +10,7 @@ pyarrow
 plotly
 lightgbm
 xgboost
-confluent-kafka
+confluent-kafka==2.8.0
 folium
 geopandas
 hopsworks==4.1.5

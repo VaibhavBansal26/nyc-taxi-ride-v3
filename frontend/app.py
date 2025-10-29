@@ -988,6 +988,8 @@
 
 import sys
 from pathlib import Path
+parent_dir = str(Path(__file__).parent.parent)
+sys.path.append(parent_dir)
 import zipfile
 import folium
 import geopandas as gpd
@@ -1162,7 +1164,7 @@ with st.spinner(text="Fetching predictions"):
     progress_bar.progress(3 / N_STEPS)
 
 # Load the lookup CSV and ensure it has a "zone" column.
-lookup_file = Path(__file__).parent.parent / "taxi_zone_lookup (1).csv"
+lookup_file = Path(__file__).parent.parent / "taxi_zone_lookup.csv"
 lookup_df = pd.read_csv(lookup_file)
 if "zone" not in lookup_df.columns:
     if "Zone" in lookup_df.columns:
