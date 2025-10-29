@@ -681,80 +681,196 @@ def fetch_batch_raw_data(
 #     return rides
 
 
+#### Current
+# def transform_ts_data_info_features(
+#     df, feature_col="rides", window_size=12, step_size=1
+# ):
+#     """
+#     Transforms time series data for all unique location IDs into a tabular format.
+#     The first `window_size` rows are used as features.
+#     The process slides down by `step_size` rows at a time to create the next set of features.
+#     Feature columns are named based on their hour offsets.
+
+#     Parameters:
+#         df (pd.DataFrame): The input DataFrame containing time series data with 'pickup_hour' column.
+#         feature_col (str): The column name containing the values to use as features (default is "rides").
+#         window_size (int): The number of rows to use as features (default is 12).
+#         step_size (int): The number of rows to slide the window by (default is 1).
+
+#     Returns:
+#         pd.DataFrame: Features DataFrame with pickup_hour and location_id.
+#     """
+#     # Get all unique location IDs
+#     location_ids = df["pickup_location_id"].unique()
+#     # List to store transformed data for each location
+#     transformed_data = []
+
+#     # Loop through each location ID and transform the data
+#     for location_id in location_ids:
+#         try:
+#             # Filter the data for the given location ID
+#             location_data = df[df["pickup_location_id"] == location_id].reset_index(
+#                 drop=True
+#             )
+
+#             # Extract the feature column and pickup_hour as NumPy arrays
+#             values = location_data[feature_col].values
+#             times = location_data["pickup_hour"].values
+
+#             # Ensure there are enough rows to create at least one window
+#             if len(values) <= window_size:
+#                 raise ValueError("Not enough data to create even one window.")
+
+#             # Create the tabular data using a sliding window approach
+#             rows = []
+#             for i in range(0, len(values) - window_size, step_size):
+#                 # The first `window_size` values are features
+#                 features = values[i : i + window_size]
+#                 # Get the corresponding target timestamp
+#                 target_time = times[i + window_size]
+#                 row = np.append(features, [location_id, target_time])
+#                 rows.append(row)
+
+#             # Convert the list of rows into a DataFrame
+#             feature_columns = [
+#                 f"{feature_col}_t-{window_size - i}" for i in range(window_size)
+#             ]
+#             all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
+#             transformed_df = pd.DataFrame(rows, columns=all_columns)
+
+#             # Append the transformed data to the list
+#             transformed_data.append(transformed_df)
+
+#         except ValueError as e:
+#             print(f"Skipping location_id {location_id}: {str(e)}")
+
+#     # Combine all transformed data into a single DataFrame
+#     if not transformed_data:
+#         raise ValueError(
+#             "No data could be transformed. Check if input DataFrame is empty or window size is too large."
+#         )
+
+#     final_df = pd.concat(transformed_data, ignore_index=True)
+
+#     # Return only the features DataFrame
+#     return final_df
+
+import numpy as np
+import pandas as pd
 
 def transform_ts_data_info_features(
-    df, feature_col="rides", window_size=12, step_size=1
-):
+    df: pd.DataFrame,
+    feature_col: str = "rides",
+    window_size: int = 12,
+    step_size: int = 1,
+    tz: str = "America/New_York",
+    fill_missing: bool = True,      # fill missing hourly buckets per location
+    fill_value: float | None = 0.0, # use None to forward/backward fill instead
+) -> pd.DataFrame:
     """
-    Transforms time series data for all unique location IDs into a tabular format.
-    The first `window_size` rows are used as features.
-    The process slides down by `step_size` rows at a time to create the next set of features.
-    Feature columns are named based on their hour offsets.
+    Build sliding-window time-series features per pickup_location_id.
+    Returns columns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
 
-    Parameters:
-        df (pd.DataFrame): The input DataFrame containing time series data with 'pickup_hour' column.
-        feature_col (str): The column name containing the values to use as features (default is "rides").
-        window_size (int): The number of rows to use as features (default is 12).
-        step_size (int): The number of rows to slide the window by (default is 1).
-
-    Returns:
-        pd.DataFrame: Features DataFrame with pickup_hour and location_id.
+    Rules:
+      - Need at least window_size + 1 rows per location to create one window.
+      - Optionally fills missing hourly buckets to avoid broken windows.
+      - Returns an EMPTY DataFrame (not an exception) when no windows can be made.
     """
-    # Get all unique location IDs
-    location_ids = df["pickup_location_id"].unique()
-    # List to store transformed data for each location
-    transformed_data = []
+    # ---- upfront validation ----
+    if df is None or not isinstance(df, pd.DataFrame):
+        raise ValueError("transform_ts_data_info_features: df must be a pandas DataFrame.")
+    if df.empty:
+        return pd.DataFrame()
+    if step_size is None or step_size <= 0:
+        raise ValueError(f"step_size must be positive; got {step_size}.")
 
-    # Loop through each location ID and transform the data
-    for location_id in location_ids:
-        try:
-            # Filter the data for the given location ID
-            location_data = df[df["pickup_location_id"] == location_id].reset_index(
-                drop=True
+    required_cols = {"pickup_location_id", "pickup_hour", feature_col}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Input DataFrame missing required columns: {sorted(missing)}")
+
+    # ensure datetime and tz-aware
+    if not pd.api.types.is_datetime64_any_dtype(df["pickup_hour"]):
+        df = df.copy()
+        df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce")
+    if df["pickup_hour"].dt.tz is None:
+        df["pickup_hour"] = df["pickup_hour"].dt.tz_localize(
+            tz, nonexistent="shift_forward", ambiguous="NaT"
+        )
+    else:
+        df["pickup_hour"] = df["pickup_hour"].dt.tz_convert(tz)
+
+    # ensure numeric feature column
+    if not pd.api.types.is_numeric_dtype(df[feature_col]):
+        df = df.copy()
+        df[feature_col] = pd.to_numeric(df[feature_col], errors="coerce")
+
+    # drop rows with unusable timestamps or features
+    df = df.dropna(subset=["pickup_hour", feature_col])
+
+    # sort for deterministic windows
+    df = df.sort_values(["pickup_location_id", "pickup_hour"])
+
+    transformed_data: list[pd.DataFrame] = []
+    feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
+    all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
+
+    # per-location processing
+    for location_id, g in df.groupby("pickup_location_id", sort=False):
+        g = g.set_index("pickup_hour").sort_index()
+
+        # fill missing hourly buckets (recommended for consistent windows)
+        if fill_missing and not g.empty:
+            full_index = pd.date_range(g.index.min(), g.index.max(), freq="H", tz=g.index.tz)
+            g = g.reindex(full_index)
+            g["pickup_location_id"] = location_id
+            if fill_value is not None:
+                g[feature_col] = g[feature_col].fillna(fill_value)
+            else:
+                g[feature_col] = g[feature_col].ffill().bfill()
+
+        g = g.reset_index().rename(columns={"index": "pickup_hour"})
+
+        values = g[feature_col].to_numpy()
+        times = g["pickup_hour"].to_numpy()
+
+        # need at least window_size features + 1 target
+        if values.shape[0] < window_size + 1:
+            continue
+
+        rows = []
+        # last start index such that i + window_size is a valid target index
+        for i in range(0, values.shape[0] - window_size, step_size):
+            features = values[i : i + window_size]
+            target_time = times[i + window_size]
+            row = np.concatenate(
+                [features, np.array([location_id, target_time], dtype=object)], axis=0
             )
+            rows.append(row)
 
-            # Extract the feature column and pickup_hour as NumPy arrays
-            values = location_data[feature_col].values
-            times = location_data["pickup_hour"].values
-
-            # Ensure there are enough rows to create at least one window
-            if len(values) <= window_size:
-                raise ValueError("Not enough data to create even one window.")
-
-            # Create the tabular data using a sliding window approach
-            rows = []
-            for i in range(0, len(values) - window_size, step_size):
-                # The first `window_size` values are features
-                features = values[i : i + window_size]
-                # Get the corresponding target timestamp
-                target_time = times[i + window_size]
-                row = np.append(features, [location_id, target_time])
-                rows.append(row)
-
-            # Convert the list of rows into a DataFrame
-            feature_columns = [
-                f"{feature_col}_t-{window_size - i}" for i in range(window_size)
-            ]
-            all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
+        if rows:
             transformed_df = pd.DataFrame(rows, columns=all_columns)
-
-            # Append the transformed data to the list
             transformed_data.append(transformed_df)
 
-        except ValueError as e:
-            print(f"Skipping location_id {location_id}: {str(e)}")
-
-    # Combine all transformed data into a single DataFrame
     if not transformed_data:
-        raise ValueError(
-            "No data could be transformed. Check if input DataFrame is empty or window size is too large."
-        )
+        # Return empty and let the caller decide how to notify the user
+        return pd.DataFrame(columns=all_columns)
 
     final_df = pd.concat(transformed_data, ignore_index=True)
 
-    # Return only the features DataFrame
-    return final_df
+    # final type cleanup
+    with pd.option_context("future.no_silent_downcasting", True):
+        for c in feature_columns:
+            final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
+        # best-effort int cast (won't fail if not castable)
+        try:
+            final_df["pickup_location_id"] = pd.to_numeric(
+                final_df["pickup_location_id"], errors="ignore", downcast="integer"
+            )
+        except Exception:
+            pass
 
+    return final_df
 
 # import os
 # import sys
