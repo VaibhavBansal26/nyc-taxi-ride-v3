@@ -50,7 +50,6 @@
 # )
 
 # feature_group.insert(predictions, write_options={"wait_for_job": False})
-
 from datetime import timedelta
 import pandas as pd
 
@@ -79,7 +78,18 @@ ts_data = feature_view.get_batch_data(
     start_time=(fetch_data_from - timedelta(days=1)),
     end_time=(fetch_data_to + timedelta(days=1)),
 )
+
+# Normalize to UTC BEFORE filtering (mirrors inference.load_batch_of_features_from_store)
+ts_data = ts_data.copy()
+ts_data["pickup_hour"] = pd.to_datetime(ts_data["pickup_hour"], errors="coerce", utc=True)
 ts_data = ts_data[ts_data.pickup_hour.between(fetch_data_from, fetch_data_to)]
+
+if ts_data.empty:
+    raise ValueError(
+        "inference_pipeline: no rows from feature store in requested window. "
+        "Check dates/timezones or widen the fetch window."
+    )
+
 ts_data = ts_data.sort_values(["pickup_location_id", "pickup_hour"]).reset_index(drop=True)
 
 # Build features: window large enough for 4 weekly lags; step_size=1 to match training
@@ -90,8 +100,13 @@ features = transform_ts_data_info_features(
     step_size=1,
 )
 
-model = load_model_from_registry()
+if features.empty:
+    raise ValueError(
+        "inference_pipeline: no sliding windows created. "
+        "Likely insufficient contiguous hourly data per location for a 672-hour window."
+    )
 
+model = load_model_from_registry()
 predictions = get_model_predictions(model, features)
 predictions["pickup_hour"] = current_date.ceil("h")
 print(predictions)

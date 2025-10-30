@@ -158,10 +158,10 @@ from hsfs.feature_store import FeatureStore
 import src.config as config
 from src.data_utils import transform_ts_data_info_features
 from src.pipeline_utils import (
-    TemporalFeatureEngineer,            # needed for joblib to resolve
-    average_rides_last_4_weeks,         # needed for joblib to resolve
-    ensure_required_lag_features,       # guard
-    REQUIRED_LAGS_FOR_AVG_4W,           # [168, 336, 504, 672]
+    TemporalFeatureEngineer,            # required for joblib load
+    average_rides_last_4_weeks,         # required for joblib load
+    ensure_required_lag_features,
+    REQUIRED_LAGS_FOR_AVG_4W,
 )
 
 
@@ -178,6 +178,10 @@ def get_feature_store() -> FeatureStore:
 
 def get_model_predictions(model, features: pd.DataFrame) -> pd.DataFrame:
     import pandas as pd
+
+    # Hard stop if no rows
+    if features is None or features.empty:
+        raise ValueError("get_model_predictions: received empty features DataFrame (no rows).")
 
     # 1) Ensure lag columns required by average_rides_last_4_weeks exist
     features = ensure_required_lag_features(
@@ -218,7 +222,22 @@ def load_batch_of_features_from_store(current_date: datetime) -> pd.DataFrame:
         start_time=(fetch_data_from - timedelta(days=1)),
         end_time=(fetch_data_to + timedelta(days=1)),
     )
+
+    # --- NEW: normalize pickup_hour to UTC BEFORE filtering ---
+    if "pickup_hour" not in ts_data.columns:
+        raise ValueError("load_batch_of_features_from_store: 'pickup_hour' not present in ts_data.")
+    ts_data = ts_data.copy()
+    ts_data["pickup_hour"] = pd.to_datetime(ts_data["pickup_hour"], errors="coerce", utc=True)
+
+    # Filter after normalization
     ts_data = ts_data[ts_data.pickup_hour.between(fetch_data_from, fetch_data_to)]
+
+    # Early stop if no rows
+    if ts_data.empty:
+        raise ValueError(
+            "load_batch_of_features_from_store: no rows from feature store in requested window. "
+            "Check your feature group dates/timezones, or widen the fetch window."
+        )
 
     # Ensure deterministic order
     ts_data.sort_values(by=["pickup_location_id", "pickup_hour"], inplace=True)
@@ -230,6 +249,14 @@ def load_batch_of_features_from_store(current_date: datetime) -> pd.DataFrame:
         window_size=24 * 28,  # 672 hours
         step_size=1,
     )
+
+    # If we couldn't form any windows across locations, bail out now with a clear reason
+    if features.empty:
+        raise ValueError(
+            "load_batch_of_features_from_store: no sliding windows created. "
+            "Likely insufficient contiguous hourly data per location for a 672-hour window. "
+            "Options: widen fetch window or reduce window_size."
+        )
 
     # Assert key columns exist right after feature build
     required_now = {"pickup_hour", "pickup_location_id"}
