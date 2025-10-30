@@ -106,17 +106,11 @@ class TemporalFeatureEngineer(BaseEstimator, TransformerMixin):
         elif {"hour", "day_of_week"}.issubset(X_.columns):
             pass
         else:
-            sample = list(X_.columns)[:30]
-            raise ValueError(
-                "TemporalFeatureEngineer: 'pickup_hour' missing and 'hour/day_of_week' not present. "
-                f"Columns: {sample}"
-            )
-        drop_cols = [c for c in ["pickup_hour", "pickup_location_id"] if c in X_.columns]
-        return X_.drop(columns=drop_cols)
+            raise ValueError("TemporalFeatureEngineer needs 'pickup_hour' or both 'hour' and 'day_of_week'.")
+        return X_.drop(columns=[c for c in ["pickup_hour", "pickup_location_id"] if c in X_])
 
 add_temporal_features = TemporalFeatureEngineer()
 
-# ---- inference guard ----
 REQUIRED_LAGS_FOR_AVG_4W = [168, 336, 504, 672]
 
 def ensure_required_lag_features(
@@ -131,7 +125,6 @@ def ensure_required_lag_features(
             X[col] = fill_value
     return X
 
-# ---- pipeline factory ----
 def get_pipeline(**hyper_params):
     return make_pipeline(
         add_feature_average_rides_last_4_weeks,
