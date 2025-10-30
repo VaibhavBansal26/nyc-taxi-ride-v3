@@ -764,19 +764,17 @@ def transform_ts_data_info_features(
     window_size: int = 12,
     step_size: int = 1,
     tz: str = "America/New_York",
-    fill_missing: bool = True,      # fill missing hourly buckets per location
-    fill_value: float | None = 0.0, # use None to forward/backward fill instead
+    fill_missing: bool = True,       # fill missing hourly buckets per location
+    fill_value: float | None = 0.0,  # set to None to ffill/bfill instead
 ) -> pd.DataFrame:
     """
     Build sliding-window time-series features per pickup_location_id.
-    Returns columns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
+    Yields columns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
 
-    Rules:
-      - Need at least window_size + 1 rows per location to create one window.
-      - Optionally fills missing hourly buckets to avoid broken windows.
-      - Returns an EMPTY DataFrame (not an exception) when no windows can be made.
+    - Requires at least (window_size + 1) rows per location to form one window.
+    - If no windows can be built for any location, returns an EMPTY DataFrame.
     """
-    # ---- upfront validation ----
+    # upfront validation
     if df is None or not isinstance(df, pd.DataFrame):
         raise ValueError("transform_ts_data_info_features: df must be a pandas DataFrame.")
     if df.empty:
@@ -839,7 +837,6 @@ def transform_ts_data_info_features(
             continue
 
         rows = []
-        # last start index such that i + window_size is a valid target index
         for i in range(0, values.shape[0] - window_size, step_size):
             features = values[i : i + window_size]
             target_time = times[i + window_size]
@@ -853,7 +850,6 @@ def transform_ts_data_info_features(
             transformed_data.append(transformed_df)
 
     if not transformed_data:
-        # Return empty and let the caller decide how to notify the user
         return pd.DataFrame(columns=all_columns)
 
     final_df = pd.concat(transformed_data, ignore_index=True)
@@ -862,7 +858,6 @@ def transform_ts_data_info_features(
     with pd.option_context("future.no_silent_downcasting", True):
         for c in feature_columns:
             final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
-        # best-effort int cast (won't fail if not castable)
         try:
             final_df["pickup_location_id"] = pd.to_numeric(
                 final_df["pickup_location_id"], errors="ignore", downcast="integer"

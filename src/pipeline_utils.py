@@ -77,13 +77,20 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import FunctionTransformer
 
-# Function to calculate the average rides over the last 4 weeks
+# --------------------------------------------------------------------------------------
+# Feature functions used inside the sklearn pipeline
+# --------------------------------------------------------------------------------------
+
 def average_rides_last_4_weeks(X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds 'average_rides_last_4_weeks' computed from weekly lag columns.
+    Requires rides_t-168, rides_t-336, rides_t-504, rides_t-672 to be present.
+    """
     last_4_weeks_columns = [
-        f"rides_t-{7*24}",   # 1 week ago -> 168
-        f"rides_t-{14*24}",  # 2 weeks ago -> 336
-        f"rides_t-{21*24}",  # 3 weeks ago -> 504
-        f"rides_t-{28*24}",  # 4 weeks ago -> 672
+        f"rides_t-{7*24}",   # 168
+        f"rides_t-{14*24}",  # 336
+        f"rides_t-{21*24}",  # 504
+        f"rides_t-{28*24}",  # 672
     ]
     for col in last_4_weeks_columns:
         if col not in X.columns:
@@ -92,36 +99,63 @@ def average_rides_last_4_weeks(X: pd.DataFrame) -> pd.DataFrame:
     X["average_rides_last_4_weeks"] = X[last_4_weeks_columns].mean(axis=1)
     return X
 
-# FunctionTransformer to add the average rides feature
+
 add_feature_average_rides_last_4_weeks = FunctionTransformer(
     average_rides_last_4_weeks, validate=False
 )
 
-# Custom transformer to add temporal features
+
 class TemporalFeatureEngineer(BaseEstimator, TransformerMixin):
+    """
+    Computes hour and day_of_week from pickup_hour if available.
+    If pickup_hour is missing, accepts precomputed 'hour' and 'day_of_week'.
+    Drops 'pickup_hour' and 'pickup_location_id' before model.
+    """
+
     def fit(self, X, y=None):
         return self
-    def transform(self, X, y=None):
-        X_ = X.copy()
-        X_["hour"] = X_["pickup_hour"].dt.hour
-        X_["day_of_week"] = X_["pickup_hour"].dt.dayofweek
-        return X_.drop(columns=["pickup_hour", "pickup_location_id"])
 
-# Instantiate the temporal feature engineer
+    def transform(self, X, y=None):
+        import pandas as pd
+
+        X_ = X.copy()
+
+        if "pickup_hour" in X_.columns:
+            if not pd.api.types.is_datetime64_any_dtype(X_["pickup_hour"]):
+                X_["pickup_hour"] = pd.to_datetime(X_["pickup_hour"], errors="coerce", utc=True)
+            X_["hour"] = X_["pickup_hour"].dt.hour
+            X_["day_of_week"] = X_["pickup_hour"].dt.dayofweek
+        elif {"hour", "day_of_week"}.issubset(X_.columns):
+            # already present, proceed
+            pass
+        else:
+            sample_cols = list(X_.columns)[:30]
+            raise ValueError(
+                "TemporalFeatureEngineer: required column 'pickup_hour' is missing and "
+                "'hour'/'day_of_week' are not present either. "
+                f"Got columns (first 30): {sample_cols}"
+            )
+
+        drop_cols = [c for c in ["pickup_hour", "pickup_location_id"] if c in X_.columns]
+        return X_.drop(columns=drop_cols)
+
+
 add_temporal_features = TemporalFeatureEngineer()
 
-# ---------- NEW: inference-time guard to ensure required lag columns exist ----------
+# --------------------------------------------------------------------------------------
+# Inference time guards to avoid schema errors
+# --------------------------------------------------------------------------------------
+
 REQUIRED_LAGS_FOR_AVG_4W = [168, 336, 504, 672]
 
 def ensure_required_lag_features(
     X: pd.DataFrame,
     feature_col: str = "rides",
-    required_lags: list[int] = None,
+    required_lags: list[int] | None = None,
     fill_value: float = 0.0,
 ) -> pd.DataFrame:
     """
-    Ensure columns like rides_t-168, rides_t-336, etc. exist.
-    If missing, create them with a safe fill_value (default 0.0).
+    Ensure rides_t-<lag> columns exist. Missing ones are created with fill_value.
     """
     if required_lags is None:
         required_lags = REQUIRED_LAGS_FOR_AVG_4W
@@ -131,12 +165,14 @@ def ensure_required_lag_features(
         if col not in X.columns:
             X[col] = fill_value
     return X
-# -------------------------------------------------------------------------------
 
-# Function to return the pipeline
+# --------------------------------------------------------------------------------------
+# Pipeline factory
+# --------------------------------------------------------------------------------------
+
 def get_pipeline(**hyper_params):
     """
-    Returns a pipeline with optional parameters for LGBMRegressor.
+    Returns a pipeline with feature engineering and LGBMRegressor.
     """
     pipeline = make_pipeline(
         add_feature_average_rides_last_4_weeks,

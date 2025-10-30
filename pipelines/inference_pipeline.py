@@ -91,6 +91,7 @@ features = transform_ts_data_info_features(
 )
 
 model = load_model_from_registry()
+
 predictions = get_model_predictions(model, features)
 predictions["pickup_hour"] = current_date.ceil("h")
 print(predictions)
