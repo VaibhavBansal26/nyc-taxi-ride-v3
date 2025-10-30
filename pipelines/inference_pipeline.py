@@ -63,23 +63,21 @@ from src.data_utils import transform_ts_data_info_features
 
 # Current time in UTC
 current_date = pd.Timestamp.now(tz="Etc/UTC")
-feature_store = get_feature_store()
+fs = get_feature_store()
 
 # read time-series data from the feature store
 fetch_data_to = current_date - timedelta(hours=1)
 fetch_data_from = current_date - timedelta(days=1 * 29)
 print(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
 
-feature_view = feature_store.get_feature_view(
-    name=config.FEATURE_VIEW_NAME, version=config.FEATURE_VIEW_VERSION
-)
+fv = fs.get_feature_view(name=config.FEATURE_VIEW_NAME, version=config.FEATURE_VIEW_VERSION)
 
-ts_data = feature_view.get_batch_data(
+ts_data = fv.get_batch_data(
     start_time=(fetch_data_from - timedelta(days=1)),
     end_time=(fetch_data_to + timedelta(days=1)),
 )
 
-# Normalize to UTC BEFORE filtering (mirrors inference.load_batch_of_features_from_store)
+# Normalize to UTC BEFORE filtering
 ts_data = ts_data.copy()
 ts_data["pickup_hour"] = pd.to_datetime(ts_data["pickup_hour"], errors="coerce", utc=True)
 ts_data = ts_data[ts_data.pickup_hour.between(fetch_data_from, fetch_data_to)]
@@ -107,15 +105,15 @@ if features.empty:
     )
 
 model = load_model_from_registry()
-predictions = get_model_predictions(model, features)
-predictions["pickup_hour"] = current_date.ceil("h")
-print(predictions)
+preds = get_model_predictions(model, features)
+preds["pickup_hour"] = current_date.ceil("h")
+print(preds)
 
-feature_group = get_feature_store().get_or_create_feature_group(
+fg = get_feature_store().get_or_create_feature_group(
     name=config.FEATURE_GROUP_MODEL_PREDICTION,
     version=1,
     description="Predictions from LGBM Model",
     primary_key=["pickup_location_id", "pickup_hour"],
     event_time="pickup_hour",
 )
-feature_group.insert(predictions, write_options={"wait_for_job": False})
+fg.insert(preds, write_options={"wait_for_job": False})

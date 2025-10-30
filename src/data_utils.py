@@ -1,211 +1,254 @@
-import os
-import sys
+# import os
+# import sys
 
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+# sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
-import calendar
+# import calendar
 
-# Add the parent directory to the Python path
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import List, Optional, Tuple, Union
+# # Add the parent directory to the Python path
+# from datetime import datetime, timedelta
+# from pathlib import Path
+# from typing import List, Optional, Tuple, Union
 
-import numpy as np
-import pandas as pd
-import pytz
-import requests
+# import numpy as np
+# import pandas as pd
+# import pytz
+# import requests
 
-from src.config import RAW_DATA_DIR
-
-
-import pyarrow.parquet as pq
+# from src.config import RAW_DATA_DIR
 
 
-def process_zone_data(): 
-    zone_path = fetch_zone_data()
-    zf = pq.read_table(zone_path)
-    zones = zf.to_pandas()
-    print("Working on Zone....")
-    zones.rename(columns={"LocationID":"pickup_location_id","Zone":"zone"},inplace=True)
-    zones.drop(columns=['service_zone','Borough'],inplace=True)
-    return zones
+# import pyarrow.parquet as pq
 
-def fetch_zone_data() -> str:
-    url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
-    df = pd.read_csv(url)
-    path = Path("..") / "data" / "raw" / "rides_zones.parquet"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path, engine='pyarrow', index=False)
+
+# def process_zone_data(): 
+#     zone_path = fetch_zone_data()
+#     zf = pq.read_table(zone_path)
+#     zones = zf.to_pandas()
+#     print("Working on Zone....")
+#     zones.rename(columns={"LocationID":"pickup_location_id","Zone":"zone"},inplace=True)
+#     zones.drop(columns=['service_zone','Borough'],inplace=True)
+#     return zones
+
+# def fetch_zone_data() -> str:
+#     url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+#     df = pd.read_csv(url)
+#     path = Path("..") / "data" / "raw" / "rides_zones.parquet"
+#     path.parent.mkdir(parents=True, exist_ok=True)
+#     df.to_parquet(path, engine='pyarrow', index=False)
     
-    print(f"Successfully saved as Parquet: {str(path)}")
-    return str(path)
+#     print(f"Successfully saved as Parquet: {str(path)}")
+#     return str(path)
 
-def fetch_raw_trip_data(year: int, month: int) -> Path:
-    URL = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02}.parquet"
-    response = requests.get(URL)
+# def fetch_raw_trip_data(year: int, month: int) -> Path:
+#     URL = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02}.parquet"
+#     response = requests.get(URL)
 
-    if response.status_code == 200:
-        path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
-        open(path, "wb").write(response.content)
-        return path
-    else:
-        raise Exception(f"{URL} is not available")
-
-
-def filter_nyc_taxi_data(rides: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
-    """
-    Filters NYC Taxi ride data for a specific year and month, removing outliers and invalid records.
-
-    Args:
-        rides (pd.DataFrame): DataFrame containing NYC Taxi ride data.
-        year (int): Year to filter for.
-        month (int): Month to filter for (1-12).
-
-    Returns:
-        pd.DataFrame: Filtered DataFrame containing only valid rides for the specified year and month.
-
-    Raises:
-        ValueError: If no valid rides are found or if input parameters are invalid.
-    """
-    # Validate inputs
-    if not (1 <= month <= 12):
-        raise ValueError("Month must be between 1 and 12.")
-    if not isinstance(year, int) or not isinstance(month, int):
-        raise ValueError("Year and month must be integers.")
-
-    # Calculate start and end dates for the specified month
-    start_date = pd.Timestamp(year=year, month=month, day=1)
-    end_date = pd.Timestamp(year=year + (month // 12), month=(month % 12) + 1, day=1)
-
-    # Add a duration column for filtering
-    rides["duration"] = rides["tpep_dropoff_datetime"] - rides["tpep_pickup_datetime"]
-
-    # Define filters
-    duration_filter = (rides["duration"] > pd.Timedelta(0)) & (
-        rides["duration"] <= pd.Timedelta(hours=5)
-    )
-    total_amount_filter = (rides["total_amount"] > 0) & (
-        rides["total_amount"] <= rides["total_amount"].quantile(0.999)
-    )
-    nyc_location_filter = ~rides["PULocationID"].isin((1, 264, 265))
-    date_range_filter = (rides["tpep_pickup_datetime"] >= start_date) & (
-        rides["tpep_pickup_datetime"] < end_date
-    )
-
-    # Combine all filters
-    final_filter = (
-        duration_filter & total_amount_filter & nyc_location_filter & date_range_filter
-    )
-
-    # Calculate dropped records
-    total_records = len(rides)
-    valid_records = final_filter.sum()
-    records_dropped = total_records - valid_records
-    percent_dropped = (records_dropped / total_records) * 100
-
-    print(f"Total records: {total_records:,}")
-    print(f"Valid records: {valid_records:,}")
-    print(f"Records dropped: {records_dropped:,} ({percent_dropped:.2f}%)")
-
-    # Filter the DataFrame
-    validated_rides = rides[final_filter]
-    validated_rides = validated_rides[["tpep_pickup_datetime", "PULocationID"]]
-    validated_rides.rename(
-        columns={
-            "tpep_pickup_datetime": "pickup_datetime",
-            "PULocationID": "pickup_location_id",
-        },
-        inplace=True,
-    )
-
-    # Verify we have data in the correct time range
-    if validated_rides.empty:
-        raise ValueError(f"No valid rides found for {year}-{month:02} after filtering.")
-
-    return validated_rides
+#     if response.status_code == 200:
+#         path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+#         open(path, "wb").write(response.content)
+#         return path
+#     else:
+#         raise Exception(f"{URL} is not available")
 
 
-def load_and_process_taxi_data(
-    year: int, months: Optional[List[int]] = None
-) -> pd.DataFrame:
-    """
-    Load and process NYC yellow taxi ride data for a specified year and list of months.
+# def filter_nyc_taxi_data(rides: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+#     """
+#     Filters NYC Taxi ride data for a specific year and month, removing outliers and invalid records.
 
-    Args:
-        year (int): Year to load data for.
-        months (Optional[List[int]]): List of months to load. If None, loads all months (1-12).
+#     Args:
+#         rides (pd.DataFrame): DataFrame containing NYC Taxi ride data.
+#         year (int): Year to filter for.
+#         month (int): Month to filter for (1-12).
 
-    Returns:
-        pd.DataFrame: Combined and processed ride data for the specified year and months.
+#     Returns:
+#         pd.DataFrame: Filtered DataFrame containing only valid rides for the specified year and month.
 
-    Raises:
-        Exception: If no data could be loaded for the specified year and months.
-    """
+#     Raises:
+#         ValueError: If no valid rides are found or if input parameters are invalid.
+#     """
+#     # Validate inputs
+#     if not (1 <= month <= 12):
+#         raise ValueError("Month must be between 1 and 12.")
+#     if not isinstance(year, int) or not isinstance(month, int):
+#         raise ValueError("Year and month must be integers.")
 
-    # Use all months if none are specified
-    if months is None:
-        months = list(range(1, 13))
+#     # Calculate start and end dates for the specified month
+#     start_date = pd.Timestamp(year=year, month=month, day=1)
+#     end_date = pd.Timestamp(year=year + (month // 12), month=(month % 12) + 1, day=1)
 
-    # List to store DataFrames for each month
-    monthly_rides = []
+#     # Add a duration column for filtering
+#     rides["duration"] = rides["tpep_dropoff_datetime"] - rides["tpep_pickup_datetime"]
 
-    for month in months:
-        # Construct the file path
-        file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+#     # Define filters
+#     duration_filter = (rides["duration"] > pd.Timedelta(0)) & (
+#         rides["duration"] <= pd.Timedelta(hours=5)
+#     )
+#     total_amount_filter = (rides["total_amount"] > 0) & (
+#         rides["total_amount"] <= rides["total_amount"].quantile(0.999)
+#     )
+#     nyc_location_filter = ~rides["PULocationID"].isin((1, 264, 265))
+#     date_range_filter = (rides["tpep_pickup_datetime"] >= start_date) & (
+#         rides["tpep_pickup_datetime"] < end_date
+#     )
 
-        try:
-            # Download the file if it doesn't exist
-            if not file_path.exists():
-                print(f"Downloading data for {year}-{month:02}...")
-                fetch_raw_trip_data(year, month)
-                print(f"Successfully downloaded data for {year}-{month:02}.")
-            else:
-                print(f"File already exists for {year}-{month:02}.")
+#     # Combine all filters
+#     final_filter = (
+#         duration_filter & total_amount_filter & nyc_location_filter & date_range_filter
+#     )
 
-            # Load the data
-            print(f"Loading data for {year}-{month:02}...")
-            rides = pd.read_parquet(file_path, engine="pyarrow")
+#     # Calculate dropped records
+#     total_records = len(rides)
+#     valid_records = final_filter.sum()
+#     records_dropped = total_records - valid_records
+#     percent_dropped = (records_dropped / total_records) * 100
 
-            # Filter and process the data
-            rides = filter_nyc_taxi_data(rides, year, month)
-            print(f"Successfully processed data for {year}-{month:02}.")
+#     print(f"Total records: {total_records:,}")
+#     print(f"Valid records: {valid_records:,}")
+#     print(f"Records dropped: {records_dropped:,} ({percent_dropped:.2f}%)")
 
-            # zones = process_zone_data()
-            # rides = pd.merge(rides,zones, how="left", on="pickup_location_id")
+#     # Filter the DataFrame
+#     validated_rides = rides[final_filter]
+#     validated_rides = validated_rides[["tpep_pickup_datetime", "PULocationID"]]
+#     validated_rides.rename(
+#         columns={
+#             "tpep_pickup_datetime": "pickup_datetime",
+#             "PULocationID": "pickup_location_id",
+#         },
+#         inplace=True,
+#     )
 
-            # rides.drop(columns=["pickup_location_id"], inplace=True)
+#     # Verify we have data in the correct time range
+#     if validated_rides.empty:
+#         raise ValueError(f"No valid rides found for {year}-{month:02} after filtering.")
 
-            # Append the processed DataFrame to the list
-            monthly_rides.append(rides)
+#     return validated_rides
 
-        except FileNotFoundError:
-            print(f"File not found for {year}-{month:02}. Skipping...")
-        except Exception as e:
-            print(f"Error processing data for {year}-{month:02}: {str(e)}")
-            continue
 
-    # Combine all monthly data
-    if not monthly_rides:
-        raise Exception(
-            f"No data could be loaded for the year {year} and specified months: {months}"
-        )
+# def load_and_process_taxi_data(
+#     year: int, months: Optional[List[int]] = None
+# ) -> pd.DataFrame:
+#     """
+#     Load and process NYC yellow taxi ride data for a specified year and list of months.
 
-    print("Combining all monthly data...")
-    combined_rides = pd.concat(monthly_rides, ignore_index=True)
-    print("Data loading and processing complete!")
+#     Args:
+#         year (int): Year to load data for.
+#         months (Optional[List[int]]): List of months to load. If None, loads all months (1-12).
 
-    return combined_rides
+#     Returns:
+#         pd.DataFrame: Combined and processed ride data for the specified year and months.
 
+#     Raises:
+#         Exception: If no data could be loaded for the specified year and months.
+#     """
+
+#     # Use all months if none are specified
+#     if months is None:
+#         months = list(range(1, 13))
+
+#     # List to store DataFrames for each month
+#     monthly_rides = []
+
+#     for month in months:
+#         # Construct the file path
+#         file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+
+#         try:
+#             # Download the file if it doesn't exist
+#             if not file_path.exists():
+#                 print(f"Downloading data for {year}-{month:02}...")
+#                 fetch_raw_trip_data(year, month)
+#                 print(f"Successfully downloaded data for {year}-{month:02}.")
+#             else:
+#                 print(f"File already exists for {year}-{month:02}.")
+
+#             # Load the data
+#             print(f"Loading data for {year}-{month:02}...")
+#             rides = pd.read_parquet(file_path, engine="pyarrow")
+
+#             # Filter and process the data
+#             rides = filter_nyc_taxi_data(rides, year, month)
+#             print(f"Successfully processed data for {year}-{month:02}.")
+
+#             # zones = process_zone_data()
+#             # rides = pd.merge(rides,zones, how="left", on="pickup_location_id")
+
+#             # rides.drop(columns=["pickup_location_id"], inplace=True)
+
+#             # Append the processed DataFrame to the list
+#             monthly_rides.append(rides)
+
+#         except FileNotFoundError:
+#             print(f"File not found for {year}-{month:02}. Skipping...")
+#         except Exception as e:
+#             print(f"Error processing data for {year}-{month:02}: {str(e)}")
+#             continue
+
+#     # Combine all monthly data
+#     if not monthly_rides:
+#         raise Exception(
+#             f"No data could be loaded for the year {year} and specified months: {months}"
+#         )
+
+#     print("Combining all monthly data...")
+#     combined_rides = pd.concat(monthly_rides, ignore_index=True)
+#     print("Data loading and processing complete!")
+
+#     return combined_rides
+
+
+# # def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
+# #     """
+# #     Fills in missing rides for all hours in the range and all unique locations.
+
+# #     Parameters:
+# #     - df: DataFrame with columns [hour_col, location_col, rides_col]
+# #     - hour_col: Name of the column containing hourly timestamps
+# #     - location_col: Name of the column containing location IDs
+# #     - rides_col: Name of the column containing ride counts
+
+# #     Returns:
+# #     - DataFrame with missing hours and locations filled in with 0 rides
+# #     """
+# #     # Ensure the hour column is in datetime format
+# #     df[hour_col] = pd.to_datetime(df[hour_col])
+
+# #     # Get the full range of hours (from min to max) with hourly frequency
+# #     full_hours = pd.date_range(
+# #         start=df[hour_col].min(), end=df[hour_col].max(), freq="h"
+# #     )
+
+# #     # Get all unique location IDs
+# #     all_locations = df[location_col].unique()
+
+# #     #Create a DataFrame with all combinations of hours and locations
+# #     full_combinations = pd.DataFrame(
+# #         [(hour, location,df.loc[df[location_col] == location, "zone"].values[0]) for hour in full_hours for location in all_locations],
+# #         columns=[hour_col, location_col, "zone"],
+# #     )
+# #     # full_combinations = pd.DataFrame(
+# #     #     [(hour, location) for hour in full_hours for location in all_locations],
+# #     #     columns=[hour_col, location_col],
+# #     # )
+
+# #     # Merge the original DataFrame with the full combinations DataFrame
+# #     merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col,"zone"], how="left")
+
+# #     # Fill missing rides with 0
+# #     merged_df[rides_col] = merged_df[rides_col].fillna(0).astype(int)
+
+# #     return merged_df
 
 # def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
 #     """
 #     Fills in missing rides for all hours in the range and all unique locations.
 
 #     Parameters:
-#     - df: DataFrame with columns [hour_col, location_col, rides_col]
+#     - df: DataFrame with columns [hour_col, location_col, rides_col, zone_col]
 #     - hour_col: Name of the column containing hourly timestamps
 #     - location_col: Name of the column containing location IDs
 #     - rides_col: Name of the column containing ride counts
+#     - zone_col: Name of the column containing zone information
 
 #     Returns:
 #     - DataFrame with missing hours and locations filled in with 0 rides
@@ -221,122 +264,735 @@ def load_and_process_taxi_data(
 #     # Get all unique location IDs
 #     all_locations = df[location_col].unique()
 
-#     #Create a DataFrame with all combinations of hours and locations
-#     full_combinations = pd.DataFrame(
-#         [(hour, location,df.loc[df[location_col] == location, "zone"].values[0]) for hour in full_hours for location in all_locations],
-#         columns=[hour_col, location_col, "zone"],
-#     )
-#     # full_combinations = pd.DataFrame(
-#     #     [(hour, location) for hour in full_hours for location in all_locations],
-#     #     columns=[hour_col, location_col],
-#     # )
+#     # Create a DataFrame with all combinations of hours and locations
+#     full_combinations = pd.DataFrame([(hour, location) for hour in full_hours for location in all_locations],
+#                                      columns=[hour_col, location_col])
 
 #     # Merge the original DataFrame with the full combinations DataFrame
-#     merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col,"zone"], how="left")
+#     merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col], how="left")
 
-#     # Fill missing rides with 0
+#     # Fill missing ride counts with 0
 #     merged_df[rides_col] = merged_df[rides_col].fillna(0).astype(int)
+
+#     # Fill missing zones using the most frequent zone for each location
+#     # zone_map = df.groupby(location_col)[zone_col].first().to_dict()
+#     # merged_df[zone_col] = merged_df[location_col].map(zone_map).fillna("Unknown")
 
 #     return merged_df
 
-def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
-    """
-    Fills in missing rides for all hours in the range and all unique locations.
-
-    Parameters:
-    - df: DataFrame with columns [hour_col, location_col, rides_col, zone_col]
-    - hour_col: Name of the column containing hourly timestamps
-    - location_col: Name of the column containing location IDs
-    - rides_col: Name of the column containing ride counts
-    - zone_col: Name of the column containing zone information
-
-    Returns:
-    - DataFrame with missing hours and locations filled in with 0 rides
-    """
-    # Ensure the hour column is in datetime format
-    df[hour_col] = pd.to_datetime(df[hour_col])
-
-    # Get the full range of hours (from min to max) with hourly frequency
-    full_hours = pd.date_range(
-        start=df[hour_col].min(), end=df[hour_col].max(), freq="h"
-    )
-
-    # Get all unique location IDs
-    all_locations = df[location_col].unique()
-
-    # Create a DataFrame with all combinations of hours and locations
-    full_combinations = pd.DataFrame([(hour, location) for hour in full_hours for location in all_locations],
-                                     columns=[hour_col, location_col])
-
-    # Merge the original DataFrame with the full combinations DataFrame
-    merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col], how="left")
-
-    # Fill missing ride counts with 0
-    merged_df[rides_col] = merged_df[rides_col].fillna(0).astype(int)
-
-    # Fill missing zones using the most frequent zone for each location
-    # zone_map = df.groupby(location_col)[zone_col].first().to_dict()
-    # merged_df[zone_col] = merged_df[location_col].map(zone_map).fillna("Unknown")
-
-    return merged_df
 
 
+# # def transform_raw_data_into_ts_data(rides: pd.DataFrame) -> pd.DataFrame:
+# #     """
+# #     Transform raw ride data into time series format.
 
-# def transform_raw_data_into_ts_data(rides: pd.DataFrame) -> pd.DataFrame:
+# #     Args:
+# #         rides: DataFrame with pickup_datetime and location columns
+
+# #     Returns:
+# #         pd.DataFrame: Time series data with filled gaps
+# #     """
+# #     # Floor datetime to hour efficiently
+# #     rides["pickup_hour"] = rides["pickup_datetime"].dt.floor("h")
+# #     # .dt.tz_localize("UTC").dt.tz_convert("America/New_York")
+
+# #     # Aggregate and fill gaps
+# #     agg_rides = (
+# #         rides.groupby(["pickup_hour", "pickup_location_id","zone"])
+# #         .size()
+# #         .reset_index(name="rides")
+# #     )
+
+# #     agg_rides_all_slots = (
+# #         fill_missing_rides_full_range(
+# #             agg_rides, "pickup_hour", "pickup_location_id", "rides"
+# #         )
+# #         .sort_values(["pickup_location_id", "pickup_hour"])
+# #         .reset_index(drop=True)
+# #     )
+
+# #     # important
+# #     agg_rides_all_slots = agg_rides_all_slots.astype(
+# #         {"pickup_location_id": "int16", "rides": "int16","zone":"str"}
+# #     )
+# #     return agg_rides_all_slots
+
+# import numpy as np
+# import pandas as pd
+
+# def transform_ts_data_info_features(
+#     df: pd.DataFrame,
+#     feature_col: str = "rides",
+#     window_size: int = 12,
+#     step_size: int = 1,
+#     tz: str = "America/New_York",
+#     fill_missing: bool = True,       # fill missing hourly buckets per location
+#     fill_value: float | None = 0.0,  # set to None to ffill/bfill instead
+# ) -> pd.DataFrame:
 #     """
-#     Transform raw ride data into time series format.
+#     Build sliding-window time-series features per pickup_location_id.
+#     Yields columns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
 
-#     Args:
-#         rides: DataFrame with pickup_datetime and location columns
-
-#     Returns:
-#         pd.DataFrame: Time series data with filled gaps
+#     - Requires at least (window_size + 1) rows per location to form one window.
+#     - If no windows can be built for any location, returns an EMPTY DataFrame.
 #     """
-#     # Floor datetime to hour efficiently
-#     rides["pickup_hour"] = rides["pickup_datetime"].dt.floor("h")
-#     # .dt.tz_localize("UTC").dt.tz_convert("America/New_York")
+#     # upfront validation
+#     if df is None or not isinstance(df, pd.DataFrame):
+#         raise ValueError("transform_ts_data_info_features: df must be a pandas DataFrame.")
+#     if df.empty:
+#         return pd.DataFrame()
+#     if step_size is None or step_size <= 0:
+#         raise ValueError(f"step_size must be positive; got {step_size}.")
 
-#     # Aggregate and fill gaps
-#     agg_rides = (
-#         rides.groupby(["pickup_hour", "pickup_location_id","zone"])
-#         .size()
-#         .reset_index(name="rides")
-#     )
+#     required_cols = {"pickup_location_id", "pickup_hour", feature_col}
+#     missing = required_cols - set(df.columns)
+#     if missing:
+#         raise ValueError(f"Input DataFrame missing required columns: {sorted(missing)}")
 
-#     agg_rides_all_slots = (
-#         fill_missing_rides_full_range(
-#             agg_rides, "pickup_hour", "pickup_location_id", "rides"
+#     # ensure datetime and tz-aware
+#     if not pd.api.types.is_datetime64_any_dtype(df["pickup_hour"]):
+#         df = df.copy()
+#         df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce")
+#     if df["pickup_hour"].dt.tz is None:
+#         df["pickup_hour"] = df["pickup_hour"].dt.tz_localize(
+#             tz, nonexistent="shift_forward", ambiguous="NaT"
 #         )
-#         .sort_values(["pickup_location_id", "pickup_hour"])
-#         .reset_index(drop=True)
-#     )
+#     else:
+#         df["pickup_hour"] = df["pickup_hour"].dt.tz_convert(tz)
 
-#     # important
-#     agg_rides_all_slots = agg_rides_all_slots.astype(
-#         {"pickup_location_id": "int16", "rides": "int16","zone":"str"}
-#     )
-#     return agg_rides_all_slots
+#     # ensure numeric feature column
+#     if not pd.api.types.is_numeric_dtype(df[feature_col]):
+#         df = df.copy()
+#         df[feature_col] = pd.to_numeric(df[feature_col], errors="coerce")
+
+#     # drop rows with unusable timestamps or features
+#     df = df.dropna(subset=["pickup_hour", feature_col])
+
+#     # sort for deterministic windows
+#     df = df.sort_values(["pickup_location_id", "pickup_hour"])
+
+#     transformed_data: list[pd.DataFrame] = []
+#     feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
+#     all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
+
+#     # per-location processing
+#     for location_id, g in df.groupby("pickup_location_id", sort=False):
+#         g = g.set_index("pickup_hour").sort_index()
+
+#         # fill missing hourly buckets (recommended for consistent windows)
+#         if fill_missing and not g.empty:
+#             full_index = pd.date_range(g.index.min(), g.index.max(), freq="H", tz=g.index.tz)
+#             g = g.reindex(full_index)
+#             g["pickup_location_id"] = location_id
+#             if fill_value is not None:
+#                 g[feature_col] = g[feature_col].fillna(fill_value)
+#             else:
+#                 g[feature_col] = g[feature_col].ffill().bfill()
+
+#         g = g.reset_index().rename(columns={"index": "pickup_hour"})
+
+#         values = g[feature_col].to_numpy()
+#         times = g["pickup_hour"].to_numpy()
+
+#         # need at least window_size features + 1 target
+#         if values.shape[0] < window_size + 1:
+#             continue
+
+#         rows = []
+#         for i in range(0, values.shape[0] - window_size, step_size):
+#             features = values[i : i + window_size]
+#             target_time = times[i + window_size]
+#             row = np.concatenate(
+#                 [features, np.array([location_id, target_time], dtype=object)], axis=0
+#             )
+#             rows.append(row)
+
+#         if rows:
+#             transformed_df = pd.DataFrame(rows, columns=all_columns)
+#             transformed_data.append(transformed_df)
+
+#     if not transformed_data:
+#         return pd.DataFrame(columns=all_columns)
+
+#     final_df = pd.concat(transformed_data, ignore_index=True)
+
+#     # final type cleanup
+#     with pd.option_context("future.no_silent_downcasting", True):
+#         for c in feature_columns:
+#             final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
+#         try:
+#             final_df["pickup_location_id"] = pd.to_numeric(
+#                 final_df["pickup_location_id"], errors="ignore", downcast="integer"
+#             )
+#         except Exception:
+#             pass
+
+#     return final_df
+
+
+# # import os
+# # import sys
+# # import calendar
+# # from datetime import datetime, timedelta
+# # from pathlib import Path
+# # from typing import List, Optional, Tuple, Union
+
+# # import numpy as np
+# # import pandas as pd
+# # import pytz
+# # import requests
+# # import pyarrow.parquet as pq
+
+# # from src.config import RAW_DATA_DIR
+
+
+# # def process_zone_data():
+# #     zone_path = fetch_zone_data()
+# #     zf = pq.read_table(zone_path)
+# #     zones = zf.to_pandas()
+# #     print("Working on Zone....")
+# #     zones.rename(columns={"LocationID": "pickup_location_id", "Zone": "zone"}, inplace=True)
+# #     zones.drop(columns=['service_zone', 'Borough'], inplace=True)
+# #     return zones
+
+
+# # def fetch_zone_data() -> str:
+# #     url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+# #     df = pd.read_csv(url)
+# #     path = Path("..") / "data" / "raw" / "rides_zones.parquet"
+# #     path.parent.mkdir(parents=True, exist_ok=True)
+# #     df.to_parquet(path, engine='pyarrow', index=False)
+# #     print(f"Successfully saved as Parquet: {str(path)}")
+# #     return str(path)
+
+
+# # def fetch_raw_trip_data(year: int, month: int) -> Path:
+# #     URL = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02}.parquet"
+# #     response = requests.get(URL)
+# #     if response.status_code == 200:
+# #         path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+# #         open(path, "wb").write(response.content)
+# #         return path
+# #     else:
+# #         raise Exception(f"{URL} is not available")
+
+
+# # def filter_nyc_taxi_data(rides: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+# #     if not (1 <= month <= 12):
+# #         raise ValueError("Month must be between 1 and 12.")
+# #     if not isinstance(year, int) or not isinstance(month, int):
+# #         raise ValueError("Year and month must be integers.")
+# #     start_date = pd.Timestamp(year=year, month=month, day=1)
+# #     end_date = pd.Timestamp(year=year + (month // 12), month=(month % 12) + 1, day=1)
+# #     rides["duration"] = rides["tpep_dropoff_datetime"] - rides["tpep_pickup_datetime"]
+# #     duration_filter = (rides["duration"] > pd.Timedelta(0)) & (rides["duration"] <= pd.Timedelta(hours=5))
+# #     total_amount_filter = (rides["total_amount"] > 0) & (rides["total_amount"] <= rides["total_amount"].quantile(0.999))
+# #     nyc_location_filter = ~rides["PULocationID"].isin((1, 264, 265))
+# #     date_range_filter = (rides["tpep_pickup_datetime"] >= start_date) & (rides["tpep_pickup_datetime"] < end_date)
+# #     final_filter = duration_filter & total_amount_filter & nyc_location_filter & date_range_filter
+# #     total_records = len(rides)
+# #     valid_records = final_filter.sum()
+# #     records_dropped = total_records - valid_records
+# #     percent_dropped = (records_dropped / total_records) * 100
+# #     print(f"Total records: {total_records:,}")
+# #     print(f"Valid records: {valid_records:,}")
+# #     print(f"Records dropped: {records_dropped:,} ({percent_dropped:.2f}%)")
+# #     validated_rides = rides[final_filter]
+# #     validated_rides = validated_rides[["tpep_pickup_datetime", "PULocationID"]]
+# #     validated_rides.rename(
+# #         columns={"tpep_pickup_datetime": "pickup_datetime", "PULocationID": "pickup_location_id"}, inplace=True
+# #     )
+# #     if validated_rides.empty:
+# #         raise ValueError(f"No valid rides found for {year}-{month:02} after filtering.")
+# #     return validated_rides
+
+
+# # def load_and_process_taxi_data(year: int, months: Optional[List[int]] = None) -> pd.DataFrame:
+# #     if months is None:
+# #         months = list(range(1, 13))
+# #     monthly_rides = []
+# #     for month in months:
+# #         file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+# #         try:
+# #             if not file_path.exists():
+# #                 print(f"Downloading data for {year}-{month:02}...")
+# #                 fetch_raw_trip_data(year, month)
+# #                 print(f"Successfully downloaded data for {year}-{month:02}.")
+# #             else:
+# #                 print(f"File already exists for {year}-{month:02}.")
+# #             print(f"Loading data for {year}-{month:02}...")
+# #             rides = pd.read_parquet(file_path, engine="pyarrow")
+# #             rides = filter_nyc_taxi_data(rides, year, month)
+# #             print(f"Successfully processed data for {year}-{month:02}.")
+# #             monthly_rides.append(rides)
+# #         except FileNotFoundError:
+# #             print(f"File not found for {year}-{month:02}. Skipping...")
+# #         except Exception as e:
+# #             print(f"Error processing data for {year}-{month:02}: {str(e)}")
+# #             continue
+# #     if not monthly_rides:
+# #         raise Exception(f"No data could be loaded for the year {year} and specified months: {months}")
+# #     print("Combining all monthly data...")
+# #     combined_rides = pd.concat(monthly_rides, ignore_index=True)
+# #     print("Data loading and processing complete!")
+# #     return combined_rides
+
+
+# # def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
+# #     df[hour_col] = pd.to_datetime(df[hour_col])
+# #     full_hours = pd.date_range(start=df[hour_col].min(), end=df[hour_col].max(), freq="h")
+# #     all_locations = df[location_col].unique()
+# #     full_combinations = pd.DataFrame([(hour, location) for hour in full_hours for location in all_locations],
+# #                                      columns=[hour_col, location_col])
+# #     merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col], how="left")
+# #     merged_df[rides_col] = merged_df[rides_col].fillna(0).astype(int)
+# #     return merged_df
+
+
+# # def transform_raw_data_into_ts_data(rides: pd.DataFrame) -> pd.DataFrame:
+# #     rides["pickup_hour"] = rides["pickup_datetime"].dt.floor("h")
+# #     agg_rides = rides.groupby(["pickup_hour", "pickup_location_id"]).size().reset_index(name="rides")
+# #     agg_rides_all_slots = (
+# #         fill_missing_rides_full_range(agg_rides, "pickup_hour", "pickup_location_id", "rides")
+# #         .sort_values(["pickup_location_id", "pickup_hour"])
+# #         .reset_index(drop=True)
+# #     )
+# #     agg_rides_all_slots = agg_rides_all_slots.astype({"pickup_location_id": "int16", "rides": "int16"})
+# #     return agg_rides_all_slots
+
+
+# # def transform_ts_data_info_features_and_target_loop(
+# #     df, feature_col="rides", window_size=12, step_size=1
+# # ):
+# #     """
+# #     Transforms time series data for all unique location IDs into a tabular format.
+# #     Uses the first `window_size` rows as features and the next row as the target.
+# #     Fallback strategy:
+# #       - If no data exists, a default window of zeros is used.
+# #       - If data exists but is insufficient, the series is padded with the first value.
+# #     Returns:
+# #         tuple: (features DataFrame with pickup_hour and pickup_location_id, targets Series)
+# #     """
+# #     location_ids = df["pickup_location_id"].unique()
+# #     transformed_data = []
+    
+# #     for location_id in location_ids:
+# #         try:
+# #             location_data = df[df["pickup_location_id"] == location_id].reset_index(drop=True)
+# #             values = location_data[feature_col].values
+# #             times = location_data["pickup_hour"].values
+            
+# #             # Fallback if no data exists.
+# #             if len(values) == 0:
+# #                 print(f"Location {location_id} has no data. Using default fallback window.")
+# #                 values = np.zeros(window_size + 1)
+# #                 times = np.array([pd.Timestamp("1970-01-01T00:00:00Z")] * (window_size + 1))
+# #             # If not enough data, pad with the first value.
+# #             elif len(values) <= window_size:
+# #                 pad_length = (window_size + 1) - len(values)
+# #                 pad_values = np.repeat(values[0], pad_length)
+# #                 pad_times = np.repeat(times[0], pad_length)
+# #                 values = np.concatenate([pad_values, values])
+# #                 times = np.concatenate([pad_times, times])
+            
+# #             rows = []
+# #             for i in range(0, len(values) - window_size, step_size):
+# #                 features_window = values[i : i + window_size]
+# #                 target = values[i + window_size]
+# #                 target_time = times[i + window_size]
+# #                 row = np.append(features_window, [target, location_id, target_time])
+# #                 rows.append(row)
+            
+# #             feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
+# #             all_columns = feature_columns + ["target", "pickup_location_id", "pickup_hour"]
+# #             transformed_df = pd.DataFrame(rows, columns=all_columns)
+# #             transformed_data.append(transformed_df)
+# #         except Exception as e:
+# #             print(f"Skipping location_id {location_id}: {str(e)}")
+    
+# #     if not transformed_data:
+# #         raise ValueError("No data could be transformed. Check if input DataFrame is empty or window size is too large.")
+    
+# #     final_df = pd.concat(transformed_data, ignore_index=True)
+# #     features = final_df[feature_columns + ["pickup_hour", "pickup_location_id"]]
+# #     targets = final_df["target"]
+# #     return features, targets
+
+
+# # def transform_ts_data_info_features_and_target(
+# #     df, feature_col="rides", window_size=12, step_size=1
+# # ):
+# #     """
+# #     Similar to the previous function but provided as a separate version.
+# #     Transforms time series data into tabular format with fallback and padding strategies.
+# #     Returns:
+# #         tuple: (features DataFrame with pickup_hour and pickup_location_id, targets Series)
+# #     """
+# #     location_ids = df["pickup_location_id"].unique()
+# #     transformed_data = []
+    
+# #     for location_id in location_ids:
+# #         try:
+# #             location_data = df[df["pickup_location_id"] == location_id].reset_index(drop=True)
+# #             values = location_data[feature_col].values
+# #             times = location_data["pickup_hour"].values
+            
+# #             if len(values) == 0:
+# #                 print(f"Location {location_id} has no data. Using default fallback window.")
+# #                 values = np.zeros(window_size + 1)
+# #                 times = np.array([pd.Timestamp("1970-01-01T00:00:00Z")] * (window_size + 1))
+# #             elif len(values) <= window_size:
+# #                 pad_length = (window_size + 1) - len(values)
+# #                 values = np.concatenate([np.repeat(values[0], pad_length), values])
+# #                 times = np.concatenate([np.repeat(times[0], pad_length), times])
+            
+# #             rows = []
+# #             for i in range(0, len(values) - window_size, step_size):
+# #                 features_window = values[i : i + window_size]
+# #                 target = values[i + window_size]
+# #                 target_time = times[i + window_size]
+# #                 row = np.append(features_window, [target, location_id, target_time])
+# #                 rows.append(row)
+            
+# #             feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
+# #             all_columns = feature_columns + ["target", "pickup_location_id", "pickup_hour"]
+# #             transformed_df = pd.DataFrame(rows, columns=all_columns)
+# #             transformed_data.append(transformed_df)
+# #         except Exception as e:
+# #             print(f"Skipping location_id {location_id}: {str(e)}")
+    
+# #     if not transformed_data:
+# #         raise ValueError("No data could be transformed. Check if input DataFrame is empty or window size is too large.")
+    
+# #     final_df = pd.concat(transformed_data, ignore_index=True)
+# #     features = final_df[feature_columns + ["pickup_hour", "pickup_location_id"]]
+# #     targets = final_df["target"]
+# #     return features, targets
+
+
+# # def transform_ts_data_info_features(
+# #     df, feature_col="rides", window_size=12, step_size=1
+# # ):
+# #     """
+# #     Transforms time series data for all unique location IDs into a features-only DataFrame.
+# #     Uses fallback and padding strategies to always produce a window.
+# #     Returns:
+# #         pd.DataFrame: Features DataFrame with pickup_hour and pickup_location_id.
+# #     """
+# #     location_ids = df["pickup_location_id"].unique()
+# #     transformed_data = []
+    
+# #     for location_id in location_ids:
+# #         try:
+# #             location_data = df[df["pickup_location_id"] == location_id].reset_index(drop=True)
+# #             values = location_data[feature_col].values
+# #             times = location_data["pickup_hour"].values
+            
+# #             if len(values) == 0:
+# #                 print(f"Location {location_id} has no data. Using default fallback window.")
+# #                 values = np.zeros(window_size + 1)
+# #                 times = np.array([pd.Timestamp("1970-01-01T00:00:00Z")] * (window_size + 1))
+# #             elif len(values) <= window_size:
+# #                 pad_length = (window_size + 1) - len(values)
+# #                 values = np.concatenate([np.repeat(values[0], pad_length), values])
+# #                 times = np.concatenate([np.repeat(times[0], pad_length), times])
+            
+# #             rows = []
+# #             for i in range(0, len(values) - window_size, step_size):
+# #                 features_window = values[i : i + window_size]
+# #                 target_time = times[i + window_size]
+# #                 row = np.append(features_window, [location_id, target_time])
+# #                 rows.append(row)
+            
+# #             feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
+# #             all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
+# #             transformed_df = pd.DataFrame(rows, columns=all_columns)
+# #             transformed_data.append(transformed_df)
+# #         except Exception as e:
+# #             print(f"Skipping location_id {location_id}: {str(e)}")
+    
+# #     if not transformed_data:
+# #         raise ValueError("No data could be transformed. Check if input DataFrame is empty or window size is too large.")
+    
+# #     final_df = pd.concat(transformed_data, ignore_index=True)
+# #     return final_df
+
+
+# # def split_time_series_data(
+# #     df: pd.DataFrame,
+# #     cutoff_date: datetime,
+# #     target_column: str,
+# # ) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+# #     train_data = df[df["pickup_hour"] < cutoff_date].reset_index(drop=True)
+# #     test_data = df[df["pickup_hour"] >= cutoff_date].reset_index(drop=True)
+# #     X_train = train_data.drop(columns=[target_column])
+# #     y_train = train_data[target_column]
+# #     X_test = test_data.drop(columns=[target_column])
+# #     y_test = test_data[target_column]
+# #     return X_train, y_train, X_test, y_test
+
+
+# # def fetch_batch_raw_data(
+# #     from_date: Union[datetime, str],
+# #     to_date: Union[datetime, str],
+# #     min_records: int = 1000,
+# #     max_expansion_months: int = 6,
+# # ) -> pd.DataFrame:
+# #     if isinstance(from_date, str):
+# #         from_date = datetime.fromisoformat(from_date)
+# #     if isinstance(to_date, str):
+# #         to_date = datetime.fromisoformat(to_date)
+# #     if from_date >= to_date:
+# #         raise ValueError("'from_date' must be earlier than 'to_date'.")
+    
+# #     base_historical_from_date = from_date - timedelta(weeks=52)
+# #     base_historical_to_date = to_date - timedelta(weeks=52)
+    
+# #     rides = pd.DataFrame()
+# #     expansion = 0
+# #     while expansion <= max_expansion_months:
+# #         expanded_from = base_historical_from_date - timedelta(days=30 * expansion)
+# #         expanded_to = base_historical_to_date + timedelta(days=30 * expansion)
+        
+# #         months_list = []
+# #         current = expanded_from.replace(day=1)
+# #         while current <= expanded_to:
+# #             months_list.append((current.year, current.month))
+# #             if current.month == 12:
+# #                 current = current.replace(year=current.year + 1, month=1)
+# #             else:
+# #                 current = current.replace(month=current.month + 1)
+# #         months_list = sorted(set(months_list))
+        
+# #         monthly_rides = []
+# #         for year, month in months_list:
+# #             try:
+# #                 file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+# #                 if not file_path.exists():
+# #                     print(f"Downloading data for {year}-{month:02}...")
+# #                     fetch_raw_trip_data(year, month)
+# #                     print(f"Successfully downloaded data for {year}-{month:02}.")
+# #                 else:
+# #                     print(f"File already exists for {year}-{month:02}.")
+# #                 print(f"Loading data for {year}-{month:02}...")
+# #                 rides_month = pd.read_parquet(file_path, engine="pyarrow")
+# #                 rides_month = filter_nyc_taxi_data(rides_month, year, month)
+# #                 monthly_rides.append(rides_month)
+# #             except Exception as e:
+# #                 print(f"Error processing data for {year}-{month:02}: {str(e)}")
+# #                 continue
+        
+# #         if monthly_rides:
+# #             rides = pd.concat(monthly_rides, ignore_index=True)
+# #             rides = rides[
+# #                 (rides["pickup_datetime"] >= np.datetime64(expanded_from)) &
+# #                 (rides["pickup_datetime"] < np.datetime64(expanded_to))
+# #             ]
+# #             if len(rides) >= min_records:
+# #                 print(f"Found {len(rides)} records using an expansion of {expansion} month(s).")
+# #                 break
+# #             else:
+# #                 print(f"Only found {len(rides)} records with {expansion} extra month(s); expanding further.")
+# #         else:
+# #             print("No data loaded for this expansion.")
+        
+# #         expansion += 1
+    
+# #     if rides.empty or len(rides) < min_records:
+# #         print("Insufficient historical data even after expansion. Using fallback strategy.")
+# #         fallback_hours = pd.date_range(start=from_date, end=to_date, freq="h")
+# #         fallback_data = pd.DataFrame({
+# #             "pickup_datetime": fallback_hours,
+# #             "pickup_location_id": 0,
+# #             "rides": 0
+# #         })
+# #         rides = fallback_data.copy()
+# #     else:
+# #         print(f"Using expanded data with {len(rides)} records.")
+    
+# #     rides["pickup_datetime"] += timedelta(weeks=52)
+# #     rides.sort_values(by=["pickup_location_id", "pickup_datetime"], inplace=True)
+# #     return rides
+
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+
+import calendar
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
+import pytz
+import requests
 
+from src.config import RAW_DATA_DIR
+import pyarrow.parquet as pq
+
+
+def process_zone_data(): 
+    zone_path = fetch_zone_data()
+    zf = pq.read_table(zone_path)
+    zones = zf.to_pandas()
+    print("Working on Zone....")
+    zones.rename(columns={"LocationID": "pickup_location_id", "Zone": "zone"}, inplace=True)
+    zones.drop(columns=["service_zone", "Borough"], inplace=True)
+    return zones
+
+
+def fetch_zone_data() -> str:
+    url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+    df = pd.read_csv(url)
+    path = Path("..") / "data" / "raw" / "rides_zones.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, engine="pyarrow", index=False)
+    print(f"Successfully saved as Parquet: {str(path)}")
+    return str(path)
+
+
+def fetch_raw_trip_data(year: int, month: int) -> Path:
+    URL = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02}.parquet"
+    response = requests.get(URL)
+    if response.status_code == 200:
+        path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+        open(path, "wb").write(response.content)
+        return path
+    else:
+        raise Exception(f"{URL} is not available")
+
+
+def filter_nyc_taxi_data(rides: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+    """
+    Filters NYC taxi rides for a specific year/month; returns ['pickup_datetime','pickup_location_id'].
+    """
+    if not (1 <= month <= 12):
+        raise ValueError("Month must be between 1 and 12.")
+    if not isinstance(year, int) or not isinstance(month, int):
+        raise ValueError("Year and month must be integers.")
+
+    start_date = pd.Timestamp(year=year, month=month, day=1)
+    end_date = pd.Timestamp(year=year + (month // 12), month=(month % 12) + 1, day=1)
+
+    rides["duration"] = rides["tpep_dropoff_datetime"] - rides["tpep_pickup_datetime"]
+
+    duration_filter = (rides["duration"] > pd.Timedelta(0)) & (
+        rides["duration"] <= pd.Timedelta(hours=5)
+    )
+    total_amount_filter = (rides["total_amount"] > 0) & (
+        rides["total_amount"] <= rides["total_amount"].quantile(0.999)
+    )
+    nyc_location_filter = ~rides["PULocationID"].isin((1, 264, 265))
+    date_range_filter = (rides["tpep_pickup_datetime"] >= start_date) & (
+        rides["tpep_pickup_datetime"] < end_date
+    )
+
+    final_filter = (
+        duration_filter & total_amount_filter & nyc_location_filter & date_range_filter
+    )
+
+    total_records = len(rides)
+    valid_records = final_filter.sum()
+    records_dropped = total_records - valid_records
+    percent_dropped = (records_dropped / total_records) * 100
+
+    print(f"Total records: {total_records:,}")
+    print(f"Valid records: {valid_records:,}")
+    print(f"Records dropped: {records_dropped:,} ({percent_dropped:.2f}%)")
+
+    validated_rides = rides[final_filter][["tpep_pickup_datetime", "PULocationID"]].copy()
+    validated_rides.rename(
+        columns={
+            "tpep_pickup_datetime": "pickup_datetime",
+            "PULocationID": "pickup_location_id",
+        },
+        inplace=True,
+    )
+
+    if validated_rides.empty:
+        raise ValueError(f"No valid rides found for {year}-{month:02} after filtering.")
+
+    return validated_rides
+
+
+def load_and_process_taxi_data(
+    year: int, months: Optional[List[int]] = None
+) -> pd.DataFrame:
+    """
+    Load and process TLC parquet for a year and selected months.
+    Returns concatenated ['pickup_datetime','pickup_location_id'].
+    """
+    if months is None:
+        months = list(range(1, 13))
+
+    monthly_rides = []
+    for month in months:
+        file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+
+        try:
+            if not file_path.exists():
+                print(f"Downloading data for {year}-{month:02}...")
+                fetch_raw_trip_data(year, month)
+                print(f"Successfully downloaded data for {year}-{month:02}.")
+            else:
+                print(f"File already exists for {year}-{month:02}.")
+
+            print(f"Loading data for {year}-{month:02}...")
+            rides = pd.read_parquet(file_path, engine="pyarrow")
+
+            rides = filter_nyc_taxi_data(rides, year, month)
+            print(f"Successfully processed data for {year}-{month:02}.")
+            monthly_rides.append(rides)
+
+        except FileNotFoundError:
+            print(f"File not found for {year}-{month:02}. Skipping...")
+        except Exception as e:
+            print(f"Error processing data for {year}-{month:02}: {str(e)}")
+            continue
+
+    if not monthly_rides:
+        raise Exception(
+            f"No data could be loaded for the year {year} and specified months: {months}"
+        )
+
+    print("Combining all monthly data...")
+    combined_rides = pd.concat(monthly_rides, ignore_index=True)
+    print("Data loading and processing complete!")
+    return combined_rides
+
+
+def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
+    """
+    Fills missing [hour, location] with 0 rides across the full hour range.
+    """
+    df[hour_col] = pd.to_datetime(df[hour_col])
+    full_hours = pd.date_range(start=df[hour_col].min(), end=df[hour_col].max(), freq="h")
+    all_locations = df[location_col].unique()
+    full_combinations = pd.DataFrame(
+        [(hour, loc) for hour in full_hours for loc in all_locations],
+        columns=[hour_col, location_col],
+    )
+    merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col], how="left")
+    merged_df[rides_col] = merged_df[rides_col].fillna(0).astype(int)
+    return merged_df
+
+
+# ---------- Sliding-window feature builder ----------
 def transform_ts_data_info_features(
     df: pd.DataFrame,
     feature_col: str = "rides",
     window_size: int = 12,
     step_size: int = 1,
     tz: str = "America/New_York",
-    fill_missing: bool = True,       # fill missing hourly buckets per location
-    fill_value: float | None = 0.0,  # set to None to ffill/bfill instead
+    fill_missing: bool = True,
+    fill_value: float | None = 0.0,
 ) -> pd.DataFrame:
     """
-    Build sliding-window time-series features per pickup_location_id.
-    Yields columns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
-
-    - Requires at least (window_size + 1) rows per location to form one window.
-    - If no windows can be built for any location, returns an EMPTY DataFrame.
+    Build sliding-window features per pickup_location_id.
+    Returns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
     """
-    # upfront validation
     if df is None or not isinstance(df, pd.DataFrame):
         raise ValueError("transform_ts_data_info_features: df must be a pandas DataFrame.")
     if df.empty:
@@ -344,12 +1000,11 @@ def transform_ts_data_info_features(
     if step_size is None or step_size <= 0:
         raise ValueError(f"step_size must be positive; got {step_size}.")
 
-    required_cols = {"pickup_location_id", "pickup_hour", feature_col}
-    missing = required_cols - set(df.columns)
+    required = {"pickup_location_id", "pickup_hour", feature_col}
+    missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Input DataFrame missing required columns: {sorted(missing)}")
 
-    # ensure datetime and tz-aware
     if not pd.api.types.is_datetime64_any_dtype(df["pickup_hour"]):
         df = df.copy()
         df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce")
@@ -360,26 +1015,20 @@ def transform_ts_data_info_features(
     else:
         df["pickup_hour"] = df["pickup_hour"].dt.tz_convert(tz)
 
-    # ensure numeric feature column
     if not pd.api.types.is_numeric_dtype(df[feature_col]):
         df = df.copy()
         df[feature_col] = pd.to_numeric(df[feature_col], errors="coerce")
 
-    # drop rows with unusable timestamps or features
     df = df.dropna(subset=["pickup_hour", feature_col])
-
-    # sort for deterministic windows
     df = df.sort_values(["pickup_location_id", "pickup_hour"])
 
-    transformed_data: list[pd.DataFrame] = []
+    transformed_data: List[pd.DataFrame] = []
     feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
     all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
 
-    # per-location processing
     for location_id, g in df.groupby("pickup_location_id", sort=False):
         g = g.set_index("pickup_hour").sort_index()
 
-        # fill missing hourly buckets (recommended for consistent windows)
         if fill_missing and not g.empty:
             full_index = pd.date_range(g.index.min(), g.index.max(), freq="H", tz=g.index.tz)
             g = g.reindex(full_index)
@@ -394,7 +1043,6 @@ def transform_ts_data_info_features(
         values = g[feature_col].to_numpy()
         times = g["pickup_hour"].to_numpy()
 
-        # need at least window_size features + 1 target
         if values.shape[0] < window_size + 1:
             continue
 
@@ -402,9 +1050,7 @@ def transform_ts_data_info_features(
         for i in range(0, values.shape[0] - window_size, step_size):
             features = values[i : i + window_size]
             target_time = times[i + window_size]
-            row = np.concatenate(
-                [features, np.array([location_id, target_time], dtype=object)], axis=0
-            )
+            row = np.concatenate([features, np.array([location_id, target_time], dtype=object)], axis=0)
             rows.append(row)
 
         if rows:
@@ -416,7 +1062,6 @@ def transform_ts_data_info_features(
 
     final_df = pd.concat(transformed_data, ignore_index=True)
 
-    # final type cleanup
     with pd.option_context("future.no_silent_downcasting", True):
         for c in feature_columns:
             final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
@@ -430,386 +1075,91 @@ def transform_ts_data_info_features(
     return final_df
 
 
-# import os
-# import sys
-# import calendar
-# from datetime import datetime, timedelta
-# from pathlib import Path
-# from typing import List, Optional, Tuple, Union
-
-# import numpy as np
-# import pandas as pd
-# import pytz
-# import requests
-# import pyarrow.parquet as pq
-
-# from src.config import RAW_DATA_DIR
-
-
-# def process_zone_data():
-#     zone_path = fetch_zone_data()
-#     zf = pq.read_table(zone_path)
-#     zones = zf.to_pandas()
-#     print("Working on Zone....")
-#     zones.rename(columns={"LocationID": "pickup_location_id", "Zone": "zone"}, inplace=True)
-#     zones.drop(columns=['service_zone', 'Borough'], inplace=True)
-#     return zones
+# =========================
+# NEW: helpers your pipeline imports
+# =========================
+def _month_year_iter(start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> List[tuple[int, int]]:
+    start_ts = pd.to_datetime(start_ts)
+    end_ts = pd.to_datetime(end_ts)
+    out = []
+    y, m = start_ts.year, start_ts.month
+    while (y < end_ts.year) or (y == end_ts.year and m <= end_ts.month):
+        out.append((y, m))
+        if m == 12:
+            y += 1
+            m = 1
+        else:
+            m += 1
+    return out
 
 
-# def fetch_zone_data() -> str:
-#     url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
-#     df = pd.read_csv(url)
-#     path = Path("..") / "data" / "raw" / "rides_zones.parquet"
-#     path.parent.mkdir(parents=True, exist_ok=True)
-#     df.to_parquet(path, engine='pyarrow', index=False)
-#     print(f"Successfully saved as Parquet: {str(path)}")
-#     return str(path)
+def fetch_batch_raw_data(start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """
+    Month-aware fetch using your TLC parquet flow + monthly filtering.
+    Returns ['pickup_datetime','pickup_location_id'] clipped to [start_ts, end_ts].
+    """
+    start_ts = pd.to_datetime(start_ts, utc=True)
+    end_ts = pd.to_datetime(end_ts, utc=True)
+
+    frames = []
+    for year, month in _month_year_iter(start_ts, end_ts):
+        fp = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+        if not fp.exists():
+            print(f"[fetch_batch_raw_data] downloading {year}-{month:02}")
+            fetch_raw_trip_data(year, month)
+        raw = pd.read_parquet(fp, engine="pyarrow")
+        monthly = filter_nyc_taxi_data(raw, year, month)
+        frames.append(monthly)
+
+    if not frames:
+        return pd.DataFrame(columns=["pickup_datetime", "pickup_location_id"])
+
+    combined = pd.concat(frames, ignore_index=True).copy()
+    if not pd.api.types.is_datetime64_any_dtype(combined["pickup_datetime"]):
+        combined["pickup_datetime"] = pd.to_datetime(combined["pickup_datetime"], errors="coerce", utc=True)
+    else:
+        if getattr(combined["pickup_datetime"].dt, "tz", None) is None:
+            combined["pickup_datetime"] = pd.to_datetime(combined["pickup_datetime"], utc=True)
+
+    mask = (combined["pickup_datetime"] >= start_ts) & (combined["pickup_datetime"] <= end_ts)
+    return combined.loc[mask].reset_index(drop=True)
 
 
-# def fetch_raw_trip_data(year: int, month: int) -> Path:
-#     URL = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02}.parquet"
-#     response = requests.get(URL)
-#     if response.status_code == 200:
-#         path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
-#         open(path, "wb").write(response.content)
-#         return path
-#     else:
-#         raise Exception(f"{URL} is not available")
+def transform_raw_data_into_ts_data(raw_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate raw trips into hourly counts:
+    Output: ['pickup_location_id','pickup_hour','rides'] with pickup_hour tz-aware (UTC).
+    """
+    if raw_df is None or raw_df.empty:
+        return pd.DataFrame(columns=["pickup_location_id", "pickup_hour", "rides"])
 
+    req = {"pickup_datetime", "pickup_location_id"}
+    if req - set(raw_df.columns):
+        raise ValueError(
+            "transform_raw_data_into_ts_data: input must contain 'pickup_datetime' and 'pickup_location_id'. "
+            f"Got: {list(raw_df.columns)[:20]}"
+        )
 
-# def filter_nyc_taxi_data(rides: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
-#     if not (1 <= month <= 12):
-#         raise ValueError("Month must be between 1 and 12.")
-#     if not isinstance(year, int) or not isinstance(month, int):
-#         raise ValueError("Year and month must be integers.")
-#     start_date = pd.Timestamp(year=year, month=month, day=1)
-#     end_date = pd.Timestamp(year=year + (month // 12), month=(month % 12) + 1, day=1)
-#     rides["duration"] = rides["tpep_dropoff_datetime"] - rides["tpep_pickup_datetime"]
-#     duration_filter = (rides["duration"] > pd.Timedelta(0)) & (rides["duration"] <= pd.Timedelta(hours=5))
-#     total_amount_filter = (rides["total_amount"] > 0) & (rides["total_amount"] <= rides["total_amount"].quantile(0.999))
-#     nyc_location_filter = ~rides["PULocationID"].isin((1, 264, 265))
-#     date_range_filter = (rides["tpep_pickup_datetime"] >= start_date) & (rides["tpep_pickup_datetime"] < end_date)
-#     final_filter = duration_filter & total_amount_filter & nyc_location_filter & date_range_filter
-#     total_records = len(rides)
-#     valid_records = final_filter.sum()
-#     records_dropped = total_records - valid_records
-#     percent_dropped = (records_dropped / total_records) * 100
-#     print(f"Total records: {total_records:,}")
-#     print(f"Valid records: {valid_records:,}")
-#     print(f"Records dropped: {records_dropped:,} ({percent_dropped:.2f}%)")
-#     validated_rides = rides[final_filter]
-#     validated_rides = validated_rides[["tpep_pickup_datetime", "PULocationID"]]
-#     validated_rides.rename(
-#         columns={"tpep_pickup_datetime": "pickup_datetime", "PULocationID": "pickup_location_id"}, inplace=True
-#     )
-#     if validated_rides.empty:
-#         raise ValueError(f"No valid rides found for {year}-{month:02} after filtering.")
-#     return validated_rides
+    df = raw_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(df["pickup_datetime"]):
+        df["pickup_datetime"] = pd.to_datetime(df["pickup_datetime"], errors="coerce", utc=True)
+    else:
+        if getattr(df["pickup_datetime"].dt, "tz", None) is None:
+            df["pickup_datetime"] = pd.to_datetime(df["pickup_datetime"], utc=True)
 
+    df["pickup_hour"] = df["pickup_datetime"].dt.floor("H")
 
-# def load_and_process_taxi_data(year: int, months: Optional[List[int]] = None) -> pd.DataFrame:
-#     if months is None:
-#         months = list(range(1, 13))
-#     monthly_rides = []
-#     for month in months:
-#         file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
-#         try:
-#             if not file_path.exists():
-#                 print(f"Downloading data for {year}-{month:02}...")
-#                 fetch_raw_trip_data(year, month)
-#                 print(f"Successfully downloaded data for {year}-{month:02}.")
-#             else:
-#                 print(f"File already exists for {year}-{month:02}.")
-#             print(f"Loading data for {year}-{month:02}...")
-#             rides = pd.read_parquet(file_path, engine="pyarrow")
-#             rides = filter_nyc_taxi_data(rides, year, month)
-#             print(f"Successfully processed data for {year}-{month:02}.")
-#             monthly_rides.append(rides)
-#         except FileNotFoundError:
-#             print(f"File not found for {year}-{month:02}. Skipping...")
-#         except Exception as e:
-#             print(f"Error processing data for {year}-{month:02}: {str(e)}")
-#             continue
-#     if not monthly_rides:
-#         raise Exception(f"No data could be loaded for the year {year} and specified months: {months}")
-#     print("Combining all monthly data...")
-#     combined_rides = pd.concat(monthly_rides, ignore_index=True)
-#     print("Data loading and processing complete!")
-#     return combined_rides
+    out = (
+        df.groupby(["pickup_location_id", "pickup_hour"])
+          .size()
+          .reset_index(name="rides")
+          .sort_values(["pickup_location_id", "pickup_hour"])
+          .reset_index(drop=True)
+    )
 
+    try:
+        out["pickup_location_id"] = pd.to_numeric(out["pickup_location_id"], downcast="integer", errors="coerce")
+    except Exception:
+        pass
 
-# def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
-#     df[hour_col] = pd.to_datetime(df[hour_col])
-#     full_hours = pd.date_range(start=df[hour_col].min(), end=df[hour_col].max(), freq="h")
-#     all_locations = df[location_col].unique()
-#     full_combinations = pd.DataFrame([(hour, location) for hour in full_hours for location in all_locations],
-#                                      columns=[hour_col, location_col])
-#     merged_df = pd.merge(full_combinations, df, on=[hour_col, location_col], how="left")
-#     merged_df[rides_col] = merged_df[rides_col].fillna(0).astype(int)
-#     return merged_df
-
-
-# def transform_raw_data_into_ts_data(rides: pd.DataFrame) -> pd.DataFrame:
-#     rides["pickup_hour"] = rides["pickup_datetime"].dt.floor("h")
-#     agg_rides = rides.groupby(["pickup_hour", "pickup_location_id"]).size().reset_index(name="rides")
-#     agg_rides_all_slots = (
-#         fill_missing_rides_full_range(agg_rides, "pickup_hour", "pickup_location_id", "rides")
-#         .sort_values(["pickup_location_id", "pickup_hour"])
-#         .reset_index(drop=True)
-#     )
-#     agg_rides_all_slots = agg_rides_all_slots.astype({"pickup_location_id": "int16", "rides": "int16"})
-#     return agg_rides_all_slots
-
-
-# def transform_ts_data_info_features_and_target_loop(
-#     df, feature_col="rides", window_size=12, step_size=1
-# ):
-#     """
-#     Transforms time series data for all unique location IDs into a tabular format.
-#     Uses the first `window_size` rows as features and the next row as the target.
-#     Fallback strategy:
-#       - If no data exists, a default window of zeros is used.
-#       - If data exists but is insufficient, the series is padded with the first value.
-#     Returns:
-#         tuple: (features DataFrame with pickup_hour and pickup_location_id, targets Series)
-#     """
-#     location_ids = df["pickup_location_id"].unique()
-#     transformed_data = []
-    
-#     for location_id in location_ids:
-#         try:
-#             location_data = df[df["pickup_location_id"] == location_id].reset_index(drop=True)
-#             values = location_data[feature_col].values
-#             times = location_data["pickup_hour"].values
-            
-#             # Fallback if no data exists.
-#             if len(values) == 0:
-#                 print(f"Location {location_id} has no data. Using default fallback window.")
-#                 values = np.zeros(window_size + 1)
-#                 times = np.array([pd.Timestamp("1970-01-01T00:00:00Z")] * (window_size + 1))
-#             # If not enough data, pad with the first value.
-#             elif len(values) <= window_size:
-#                 pad_length = (window_size + 1) - len(values)
-#                 pad_values = np.repeat(values[0], pad_length)
-#                 pad_times = np.repeat(times[0], pad_length)
-#                 values = np.concatenate([pad_values, values])
-#                 times = np.concatenate([pad_times, times])
-            
-#             rows = []
-#             for i in range(0, len(values) - window_size, step_size):
-#                 features_window = values[i : i + window_size]
-#                 target = values[i + window_size]
-#                 target_time = times[i + window_size]
-#                 row = np.append(features_window, [target, location_id, target_time])
-#                 rows.append(row)
-            
-#             feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
-#             all_columns = feature_columns + ["target", "pickup_location_id", "pickup_hour"]
-#             transformed_df = pd.DataFrame(rows, columns=all_columns)
-#             transformed_data.append(transformed_df)
-#         except Exception as e:
-#             print(f"Skipping location_id {location_id}: {str(e)}")
-    
-#     if not transformed_data:
-#         raise ValueError("No data could be transformed. Check if input DataFrame is empty or window size is too large.")
-    
-#     final_df = pd.concat(transformed_data, ignore_index=True)
-#     features = final_df[feature_columns + ["pickup_hour", "pickup_location_id"]]
-#     targets = final_df["target"]
-#     return features, targets
-
-
-# def transform_ts_data_info_features_and_target(
-#     df, feature_col="rides", window_size=12, step_size=1
-# ):
-#     """
-#     Similar to the previous function but provided as a separate version.
-#     Transforms time series data into tabular format with fallback and padding strategies.
-#     Returns:
-#         tuple: (features DataFrame with pickup_hour and pickup_location_id, targets Series)
-#     """
-#     location_ids = df["pickup_location_id"].unique()
-#     transformed_data = []
-    
-#     for location_id in location_ids:
-#         try:
-#             location_data = df[df["pickup_location_id"] == location_id].reset_index(drop=True)
-#             values = location_data[feature_col].values
-#             times = location_data["pickup_hour"].values
-            
-#             if len(values) == 0:
-#                 print(f"Location {location_id} has no data. Using default fallback window.")
-#                 values = np.zeros(window_size + 1)
-#                 times = np.array([pd.Timestamp("1970-01-01T00:00:00Z")] * (window_size + 1))
-#             elif len(values) <= window_size:
-#                 pad_length = (window_size + 1) - len(values)
-#                 values = np.concatenate([np.repeat(values[0], pad_length), values])
-#                 times = np.concatenate([np.repeat(times[0], pad_length), times])
-            
-#             rows = []
-#             for i in range(0, len(values) - window_size, step_size):
-#                 features_window = values[i : i + window_size]
-#                 target = values[i + window_size]
-#                 target_time = times[i + window_size]
-#                 row = np.append(features_window, [target, location_id, target_time])
-#                 rows.append(row)
-            
-#             feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
-#             all_columns = feature_columns + ["target", "pickup_location_id", "pickup_hour"]
-#             transformed_df = pd.DataFrame(rows, columns=all_columns)
-#             transformed_data.append(transformed_df)
-#         except Exception as e:
-#             print(f"Skipping location_id {location_id}: {str(e)}")
-    
-#     if not transformed_data:
-#         raise ValueError("No data could be transformed. Check if input DataFrame is empty or window size is too large.")
-    
-#     final_df = pd.concat(transformed_data, ignore_index=True)
-#     features = final_df[feature_columns + ["pickup_hour", "pickup_location_id"]]
-#     targets = final_df["target"]
-#     return features, targets
-
-
-# def transform_ts_data_info_features(
-#     df, feature_col="rides", window_size=12, step_size=1
-# ):
-#     """
-#     Transforms time series data for all unique location IDs into a features-only DataFrame.
-#     Uses fallback and padding strategies to always produce a window.
-#     Returns:
-#         pd.DataFrame: Features DataFrame with pickup_hour and pickup_location_id.
-#     """
-#     location_ids = df["pickup_location_id"].unique()
-#     transformed_data = []
-    
-#     for location_id in location_ids:
-#         try:
-#             location_data = df[df["pickup_location_id"] == location_id].reset_index(drop=True)
-#             values = location_data[feature_col].values
-#             times = location_data["pickup_hour"].values
-            
-#             if len(values) == 0:
-#                 print(f"Location {location_id} has no data. Using default fallback window.")
-#                 values = np.zeros(window_size + 1)
-#                 times = np.array([pd.Timestamp("1970-01-01T00:00:00Z")] * (window_size + 1))
-#             elif len(values) <= window_size:
-#                 pad_length = (window_size + 1) - len(values)
-#                 values = np.concatenate([np.repeat(values[0], pad_length), values])
-#                 times = np.concatenate([np.repeat(times[0], pad_length), times])
-            
-#             rows = []
-#             for i in range(0, len(values) - window_size, step_size):
-#                 features_window = values[i : i + window_size]
-#                 target_time = times[i + window_size]
-#                 row = np.append(features_window, [location_id, target_time])
-#                 rows.append(row)
-            
-#             feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
-#             all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
-#             transformed_df = pd.DataFrame(rows, columns=all_columns)
-#             transformed_data.append(transformed_df)
-#         except Exception as e:
-#             print(f"Skipping location_id {location_id}: {str(e)}")
-    
-#     if not transformed_data:
-#         raise ValueError("No data could be transformed. Check if input DataFrame is empty or window size is too large.")
-    
-#     final_df = pd.concat(transformed_data, ignore_index=True)
-#     return final_df
-
-
-# def split_time_series_data(
-#     df: pd.DataFrame,
-#     cutoff_date: datetime,
-#     target_column: str,
-# ) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
-#     train_data = df[df["pickup_hour"] < cutoff_date].reset_index(drop=True)
-#     test_data = df[df["pickup_hour"] >= cutoff_date].reset_index(drop=True)
-#     X_train = train_data.drop(columns=[target_column])
-#     y_train = train_data[target_column]
-#     X_test = test_data.drop(columns=[target_column])
-#     y_test = test_data[target_column]
-#     return X_train, y_train, X_test, y_test
-
-
-# def fetch_batch_raw_data(
-#     from_date: Union[datetime, str],
-#     to_date: Union[datetime, str],
-#     min_records: int = 1000,
-#     max_expansion_months: int = 6,
-# ) -> pd.DataFrame:
-#     if isinstance(from_date, str):
-#         from_date = datetime.fromisoformat(from_date)
-#     if isinstance(to_date, str):
-#         to_date = datetime.fromisoformat(to_date)
-#     if from_date >= to_date:
-#         raise ValueError("'from_date' must be earlier than 'to_date'.")
-    
-#     base_historical_from_date = from_date - timedelta(weeks=52)
-#     base_historical_to_date = to_date - timedelta(weeks=52)
-    
-#     rides = pd.DataFrame()
-#     expansion = 0
-#     while expansion <= max_expansion_months:
-#         expanded_from = base_historical_from_date - timedelta(days=30 * expansion)
-#         expanded_to = base_historical_to_date + timedelta(days=30 * expansion)
-        
-#         months_list = []
-#         current = expanded_from.replace(day=1)
-#         while current <= expanded_to:
-#             months_list.append((current.year, current.month))
-#             if current.month == 12:
-#                 current = current.replace(year=current.year + 1, month=1)
-#             else:
-#                 current = current.replace(month=current.month + 1)
-#         months_list = sorted(set(months_list))
-        
-#         monthly_rides = []
-#         for year, month in months_list:
-#             try:
-#                 file_path = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
-#                 if not file_path.exists():
-#                     print(f"Downloading data for {year}-{month:02}...")
-#                     fetch_raw_trip_data(year, month)
-#                     print(f"Successfully downloaded data for {year}-{month:02}.")
-#                 else:
-#                     print(f"File already exists for {year}-{month:02}.")
-#                 print(f"Loading data for {year}-{month:02}...")
-#                 rides_month = pd.read_parquet(file_path, engine="pyarrow")
-#                 rides_month = filter_nyc_taxi_data(rides_month, year, month)
-#                 monthly_rides.append(rides_month)
-#             except Exception as e:
-#                 print(f"Error processing data for {year}-{month:02}: {str(e)}")
-#                 continue
-        
-#         if monthly_rides:
-#             rides = pd.concat(monthly_rides, ignore_index=True)
-#             rides = rides[
-#                 (rides["pickup_datetime"] >= np.datetime64(expanded_from)) &
-#                 (rides["pickup_datetime"] < np.datetime64(expanded_to))
-#             ]
-#             if len(rides) >= min_records:
-#                 print(f"Found {len(rides)} records using an expansion of {expansion} month(s).")
-#                 break
-#             else:
-#                 print(f"Only found {len(rides)} records with {expansion} extra month(s); expanding further.")
-#         else:
-#             print("No data loaded for this expansion.")
-        
-#         expansion += 1
-    
-#     if rides.empty or len(rides) < min_records:
-#         print("Insufficient historical data even after expansion. Using fallback strategy.")
-#         fallback_hours = pd.date_range(start=from_date, end=to_date, freq="h")
-#         fallback_data = pd.DataFrame({
-#             "pickup_datetime": fallback_hours,
-#             "pickup_location_id": 0,
-#             "rides": 0
-#         })
-#         rides = fallback_data.copy()
-#     else:
-#         print(f"Using expanded data with {len(rides)} records.")
-    
-#     rides["pickup_datetime"] += timedelta(weeks=52)
-#     rides.sort_values(by=["pickup_location_id", "pickup_datetime"], inplace=True)
-#     return rides
+    return out
