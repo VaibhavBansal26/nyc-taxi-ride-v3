@@ -147,6 +147,140 @@
 #     cond = (df["pickup_hour"] >= fetch_data_from) & (df["pickup_hour"] <= fetch_data_to)
 #     return df[cond]
 
+# from datetime import datetime, timedelta, timezone
+# from pathlib import Path
+
+# import hopsworks
+# import pandas as pd
+# from hsfs.feature_store import FeatureStore
+
+# import src.config as config
+# from src.data_utils import transform_ts_data_info_features
+# from src.pipeline_utils import (
+#     TemporalFeatureEngineer,            # needed for joblib unpickle
+#     average_rides_last_4_weeks,         # needed for joblib unpickle
+#     ensure_required_lag_features,
+#     REQUIRED_LAGS_FOR_AVG_4W,
+# )
+
+# # ------------- Hopsworks basics -------------
+# def get_hopsworks_project() -> hopsworks.project.Project:
+#     return hopsworks.login(
+#         project=config.HOPSWORKS_PROJECT_NAME,
+#         api_key_value=config.HOPSWORKS_API_KEY,
+#     )
+
+# def get_feature_store() -> FeatureStore:
+#     return get_hopsworks_project().get_feature_store()
+
+# # ------------- FG-ONLY reader (no FV calls anywhere) -------------
+# def load_batch_of_features_from_store(current_date: datetime) -> pd.DataFrame:
+#     """
+#     Read directly from Feature Group only. Never call get_feature_view().
+#     Builds 28d (672h) sliding windows with step=1.
+#     """
+#     fs = get_feature_store()
+
+#     fetch_data_to = current_date - timedelta(hours=1)
+#     fetch_data_from = current_date - timedelta(days=29)
+#     print(f"[FG-only] Fetching data from {fetch_data_from} to {fetch_data_to}")
+
+#     fg = fs.get_feature_group(
+#         name=config.FEATURE_GROUP_NAME,
+#         version=config.FEATURE_GROUP_VERSION,
+#     )
+#     df = fg.select_all().read()
+
+#     required_cols = {"pickup_hour", "pickup_location_id", "rides"}
+#     missing = required_cols - set(df.columns)
+#     if missing:
+#         raise ValueError(
+#             f"[FG-only] Feature Group missing required columns {sorted(missing)}. "
+#             f"Available: {list(df.columns)}"
+#         )
+
+#     df = df.copy()
+#     df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce", utc=True)
+#     ts_data = df[df["pickup_hour"].between(fetch_data_from, fetch_data_to)]
+#     if ts_data.empty:
+#         raise ValueError("[FG-only] No rows from Feature Group in requested window.")
+
+#     ts_data = ts_data.sort_values(["pickup_location_id", "pickup_hour"]).reset_index(drop=True)
+
+#     features = transform_ts_data_info_features(
+#         ts_data,
+#         feature_col="rides",
+#         window_size=24 * 28,   # 672 hours
+#         step_size=1,
+#     )
+#     if features.empty:
+#         raise ValueError("[FG-only] Sliding-window transform produced zero rows; check data continuity.")
+
+#     for c in ["pickup_location_id", "pickup_hour"]:
+#         if c not in features.columns:
+#             raise ValueError(f"[FG-only] Missing required column after transform: {c}")
+
+#     return features
+
+# # ------------- Predictions helpers -------------
+# def get_model_predictions(model, features: pd.DataFrame) -> pd.DataFrame:
+#     if features is None or features.empty:
+#         raise ValueError("get_model_predictions: empty features DataFrame")
+
+#     # ensure weekly-average inputs exist for the FunctionTransformer
+#     features = ensure_required_lag_features(
+#         features,
+#         feature_col="rides",
+#         required_lags=REQUIRED_LAGS_FOR_AVG_4W,
+#         fill_value=0.0,
+#     )
+
+#     if "pickup_hour" not in features.columns:
+#         raise ValueError("get_model_predictions: 'pickup_hour' missing before model.predict")
+
+#     if not pd.api.types.is_datetime64_any_dtype(features["pickup_hour"]):
+#         features = features.copy()
+#         features["pickup_hour"] = pd.to_datetime(features["pickup_hour"], errors="coerce", utc=True)
+
+#     preds = model.predict(features)
+#     out = pd.DataFrame({
+#         "pickup_location_id": features["pickup_location_id"].values,
+#         "predicted_demand": pd.Series(preds).round(0),
+#     })
+#     return out
+
+# def load_model_from_registry(version=None):
+#     import joblib
+#     # keep custom transformers importable during unpickle
+#     from src.pipeline_utils import TemporalFeatureEngineer, average_rides_last_4_weeks  # noqa: F401
+#     mr = get_hopsworks_project().get_model_registry()
+#     model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
+#     model_dir = model.download()
+#     return joblib.load(Path(model_dir) / "lgb_model.pkl")
+
+# def load_metrics_from_registry(version=None):
+#     mr = get_hopsworks_project().get_model_registry()
+#     model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
+#     return model.training_metrics
+
+# # ------------- Convenience fetchers (unchanged) -------------
+# def fetch_next_hour_predictions():
+#     now = datetime.now(timezone.utc)
+#     next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+#     fs = get_feature_store()
+#     fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
+#     df = fg.read()
+#     return df[df["pickup_hour"] == next_hour]
+
+# def fetch_predictions(hours):
+#     current_hour = (pd.Timestamp.now(tz="Etc/UTC") - timedelta(hours=hours)).floor("h")
+#     fs = get_feature_store()
+#     fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
+#     return fg.filter((fg.pickup_hour >= current_hour)).read()
+
+# src/inference.py
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -156,14 +290,9 @@ from hsfs.feature_store import FeatureStore
 
 import src.config as config
 from src.data_utils import transform_ts_data_info_features
-from src.pipeline_utils import (
-    TemporalFeatureEngineer,            # needed for joblib unpickle
-    average_rides_last_4_weeks,         # needed for joblib unpickle
-    ensure_required_lag_features,
-    REQUIRED_LAGS_FOR_AVG_4W,
-)
 
-# ------------- Hopsworks basics -------------
+
+# ---------- Hopsworks ----------
 def get_hopsworks_project() -> hopsworks.project.Project:
     return hopsworks.login(
         project=config.HOPSWORKS_PROJECT_NAME,
@@ -173,85 +302,147 @@ def get_hopsworks_project() -> hopsworks.project.Project:
 def get_feature_store() -> FeatureStore:
     return get_hopsworks_project().get_feature_store()
 
-# ------------- FG-ONLY reader (no FV calls anywhere) -------------
+
+# ---------- FV helpers inlined here ----------
+def _ensure_feature_view(fs: FeatureStore):
+    """
+    Idempotently ensure the Feature View exists and return it.
+    If creation/read is not possible (permissions, etc.), return None.
+    """
+    try:
+        return fs.get_feature_view(
+            name=config.FEATURE_VIEW_NAME,
+            version=config.FEATURE_VIEW_VERSION,
+        )
+    except Exception:
+        pass  # try to create
+
+    try:
+        fg = fs.get_feature_group(
+            name=config.FEATURE_GROUP_NAME,
+            version=config.FEATURE_GROUP_VERSION,
+        )
+        q = fg.select_all()
+        fs.create_feature_view(
+            name=config.FEATURE_VIEW_NAME,
+            version=config.FEATURE_VIEW_VERSION,
+            description="Hourly rides per pickup_location_id",
+            query=q,
+            labels=[],
+        )
+        fv = fs.get_feature_view(
+            name=config.FEATURE_VIEW_NAME,
+            version=config.FEATURE_VIEW_VERSION,
+        )
+        print(f"[FV] Created {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
+        return fv
+    except Exception as e:
+        print(f"[FV] Could not create/read FV (fallback FG): {type(e).__name__}: {e}")
+        return None
+
+def _read_timeseries_preferring_fv(
+    fs: FeatureStore,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+) -> pd.DataFrame:
+    """
+    Try FV first (ensure if missing), then FG fallback.
+    Returns at least: pickup_location_id, pickup_hour, rides (pickup_hour in UTC).
+    """
+    fv = _ensure_feature_view(fs)
+    if fv is not None:
+        try:
+            df = fv.get_batch_data(
+                start_time=(start_ts - pd.Timedelta(days=1)),
+                end_time=(end_ts + pd.Timedelta(days=1)),
+            )
+            if "pickup_hour" in df.columns and not df.empty:
+                out = df.copy()
+                out["pickup_hour"] = pd.to_datetime(out["pickup_hour"], errors="coerce", utc=True)
+                out = out[out["pickup_hour"].between(start_ts, end_ts)]
+                if not out.empty:
+                    print(f"[read:FV] {len(out)} rows -> {out['pickup_hour'].min()} .. {out['pickup_hour'].max()}")
+                    return out
+        except Exception as e:
+            print(f"[read:FV] error -> fallback FG: {e}")
+
+    # FG fallback
+    fg = fs.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
+    df = fg.select_all().read()
+    need = {"pickup_hour", "pickup_location_id", "rides"}
+    miss = need - set(df.columns)
+    if miss:
+        raise ValueError(f"[read:FG] missing columns {sorted(miss)}; have {list(df.columns)}")
+    df = df.copy()
+    df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce", utc=True)
+    out = df[df["pickup_hour"].between(start_ts, end_ts)]
+    print(f"[read:FG] {len(out)} rows -> "
+          f"{None if out.empty else out['pickup_hour'].min()} .. "
+          f"{None if out.empty else out['pickup_hour'].max()}")
+    return out
+
+
+# ---------- Public loader ----------
 def load_batch_of_features_from_store(current_date: datetime) -> pd.DataFrame:
     """
-    Read directly from Feature Group only. Never call get_feature_view().
-    Builds 28d (672h) sliding windows with step=1.
+    Load last 29 days up to 1 hour ago (FV preferred, FG fallback),
+    then build 28-day (672h) sliding-window features (step=1).
     """
     fs = get_feature_store()
 
-    fetch_data_to = current_date - timedelta(hours=1)
-    fetch_data_from = current_date - timedelta(days=29)
-    print(f"[FG-only] Fetching data from {fetch_data_from} to {fetch_data_to}")
+    ts_in = pd.Timestamp(current_date)
+    current_utc = ts_in.tz_convert("UTC") if ts_in.tzinfo else ts_in.tz_localize("UTC")
+    fetch_to = current_utc - pd.Timedelta(hours=1)
+    fetch_from = current_utc - pd.Timedelta(days=29)
+    print(f"[inference] window {fetch_from} .. {fetch_to}")
 
-    fg = fs.get_feature_group(
-        name=config.FEATURE_GROUP_NAME,
-        version=config.FEATURE_GROUP_VERSION,
-    )
-    df = fg.select_all().read()
+    ts = _read_timeseries_preferring_fv(fs, fetch_from, fetch_to)
+    if ts.empty:
+        raise ValueError("No rows in requested window (FV/FG). Make sure feature pipeline ingested data.")
 
-    required_cols = {"pickup_hour", "pickup_location_id", "rides"}
-    missing = required_cols - set(df.columns)
-    if missing:
-        raise ValueError(
-            f"[FG-only] Feature Group missing required columns {sorted(missing)}. "
-            f"Available: {list(df.columns)}"
-        )
-
-    df = df.copy()
-    df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce", utc=True)
-    ts_data = df[df["pickup_hour"].between(fetch_data_from, fetch_data_to)]
-    if ts_data.empty:
-        raise ValueError("[FG-only] No rows from Feature Group in requested window.")
-
-    ts_data = ts_data.sort_values(["pickup_location_id", "pickup_hour"]).reset_index(drop=True)
+    ts = ts.sort_values(["pickup_location_id", "pickup_hour"]).reset_index(drop=True)
 
     features = transform_ts_data_info_features(
-        ts_data,
+        ts,
         feature_col="rides",
-        window_size=24 * 28,   # 672 hours
+        window_size=24 * 28,  # 672
         step_size=1,
+        tz="America/New_York",
+        fill_missing=True,
+        fill_value=0.0,
     )
     if features.empty:
-        raise ValueError("[FG-only] Sliding-window transform produced zero rows; check data continuity.")
+        raise ValueError("Sliding-window transform produced zero rows; check continuity/gaps.")
 
-    for c in ["pickup_location_id", "pickup_hour"]:
+    for c in ("pickup_location_id", "pickup_hour"):
         if c not in features.columns:
-            raise ValueError(f"[FG-only] Missing required column after transform: {c}")
+            raise ValueError(f"Missing column after transform: {c}")
 
     return features
 
-# ------------- Predictions helpers -------------
+
+# ---------- Model helpers ----------
 def get_model_predictions(model, features: pd.DataFrame) -> pd.DataFrame:
     if features is None or features.empty:
         raise ValueError("get_model_predictions: empty features DataFrame")
-
-    # ensure weekly-average inputs exist for the FunctionTransformer
-    features = ensure_required_lag_features(
-        features,
-        feature_col="rides",
-        required_lags=REQUIRED_LAGS_FOR_AVG_4W,
-        fill_value=0.0,
-    )
-
     if "pickup_hour" not in features.columns:
-        raise ValueError("get_model_predictions: 'pickup_hour' missing before model.predict")
+        raise ValueError("get_model_predictions: 'pickup_hour' required")
 
     if not pd.api.types.is_datetime64_any_dtype(features["pickup_hour"]):
         features = features.copy()
         features["pickup_hour"] = pd.to_datetime(features["pickup_hour"], errors="coerce", utc=True)
 
     preds = model.predict(features)
-    out = pd.DataFrame({
-        "pickup_location_id": features["pickup_location_id"].values,
-        "predicted_demand": pd.Series(preds).round(0),
-    })
-    return out
+    return pd.DataFrame(
+        {
+            "pickup_location_id": features["pickup_location_id"].values,
+            "predicted_demand": pd.Series(preds).round(0),
+        }
+    )
 
 def load_model_from_registry(version=None):
     import joblib
-    # keep custom transformers importable during unpickle
+    # ensure custom transformers import during unpickle
     from src.pipeline_utils import TemporalFeatureEngineer, average_rides_last_4_weeks  # noqa: F401
     mr = get_hopsworks_project().get_model_registry()
     model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
@@ -263,7 +454,6 @@ def load_metrics_from_registry(version=None):
     model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
     return model.training_metrics
 
-# ------------- Convenience fetchers (unchanged) -------------
 def fetch_next_hour_predictions():
     now = datetime.now(timezone.utc)
     next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
@@ -272,8 +462,8 @@ def fetch_next_hour_predictions():
     df = fg.read()
     return df[df["pickup_hour"] == next_hour]
 
-def fetch_predictions(hours):
-    current_hour = (pd.Timestamp.now(tz="Etc/UTC") - timedelta(hours=hours)).floor("h")
+def fetch_predictions(hours: int):
+    current_hour = (pd.Timestamp.now(tz="Etc/UTC") - pd.Timedelta(hours=hours)).floor("h")
     fs = get_feature_store()
     fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
     return fg.filter((fg.pickup_hour >= current_hour)).read()
