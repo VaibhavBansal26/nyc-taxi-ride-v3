@@ -119,16 +119,23 @@
 # fg.insert(preds, write_options={"wait_for_job": False})
 
 # pipelines/inference_pipeline.py
-# ---- put these near the top with your other imports ----
 from datetime import datetime, timedelta, timezone
-import pandas as pd
+from pathlib import Path
+
 import hopsworks
+import pandas as pd
 from hsfs.feature_store import FeatureStore
 
 import src.config as config
 from src.data_utils import transform_ts_data_info_features
+from src.pipeline_utils import (
+    TemporalFeatureEngineer,            # needed for joblib unpickle
+    average_rides_last_4_weeks,         # needed for joblib unpickle
+    ensure_required_lag_features,
+    REQUIRED_LAGS_FOR_AVG_4W,
+)
 
-# ---------- helpers ----------
+# ---------- Hopsworks plumbing ----------
 def get_hopsworks_project() -> hopsworks.project.Project:
     return hopsworks.login(
         project=config.HOPSWORKS_PROJECT_NAME,
@@ -138,21 +145,62 @@ def get_hopsworks_project() -> hopsworks.project.Project:
 def get_feature_store() -> FeatureStore:
     return get_hopsworks_project().get_feature_store()
 
+# ---------- FV auto-create (idempotent) ----------
+def _ensure_feature_view(fs: FeatureStore):
+    """
+    Ensure Feature View exists pointing to your hourly Feature Group.
+    - If FV already exists -> returns it.
+    - If not, attempts to create it from FG.
+    - If creation fails (permissions/roles), returns None (caller will fallback to FG).
+    """
+    try:
+        fv = fs.get_feature_view(
+            name=config.FEATURE_VIEW_NAME,
+            version=config.FEATURE_VIEW_VERSION,
+        )
+        return fv
+    except Exception:
+        pass  # will try to create
+
+    try:
+        fg = fs.get_feature_group(
+            name=config.FEATURE_GROUP_NAME,
+            version=config.FEATURE_GROUP_VERSION,
+        )
+        query = fg.select_all()
+        # create if missing
+        fs.create_feature_view(
+            name=config.FEATURE_VIEW_NAME,
+            version=config.FEATURE_VIEW_VERSION,
+            description="Hourly rides per pickup_location_id (auto-created)",
+            query=query,
+            labels=[],
+        )
+        # fetch again
+        fv = fs.get_feature_view(
+            name=config.FEATURE_VIEW_NAME,
+            version=config.FEATURE_VIEW_VERSION,
+        )
+        print(f"[FV] Created: {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
+        return fv
+    except Exception as e:
+        print(f"[FV] Could not create FV (will fallback to FG): {type(e).__name__}: {e}")
+        return None
+
+# ---------- Reader with FV>FG fallback ----------
 def _read_timeseries_from_store(
     feature_store: FeatureStore,
     fetch_data_from: pd.Timestamp,
     fetch_data_to: pd.Timestamp,
 ) -> pd.DataFrame:
     """
-    Try Feature View; if it errors or returns no rows, fall back to Feature Group.
-    Returns ['pickup_location_id','pickup_hour','rides'] in the requested window (UTC).
+    Prefer Feature View (auto-create if missing). If FV is unavailable or empty, fallback to Feature Group.
+    Returns: ['pickup_location_id','pickup_hour','rides'] (UTC) within [from, to].
     """
-    # 1) Try Feature View
+    # Try FV (and create if missing)
+    fv = None
     try:
-        fv = feature_store.get_feature_view(
-            name=config.FEATURE_VIEW_NAME,
-            version=config.FEATURE_VIEW_VERSION,
-        )
+        fv = _ensure_feature_view(feature_store)
         if fv is not None:
             tmp = fv.get_batch_data(
                 start_time=(fetch_data_from - timedelta(days=1)),
@@ -166,53 +214,89 @@ def _read_timeseries_from_store(
                     print(f"[store:FV] {len(ts)} rows. Range: {ts['pickup_hour'].min()} .. {ts['pickup_hour'].max()}")
                     return ts
     except Exception as e:
-        # swallow FV errors and try FG
-        print(f"[store:FV] skipping due to error: {type(e).__name__}: {e}")
+        print(f"[store:FV] error (will fallback to FG): {type(e).__name__}: {e}")
 
-    # 2) Fallback to Feature Group
+    # FG fallback
     fg = feature_store.get_feature_group(
         name=config.FEATURE_GROUP_NAME,
         version=config.FEATURE_GROUP_VERSION,
     )
     df = fg.select_all().read()
     if "pickup_hour" not in df.columns:
-        raise ValueError("Feature Group read succeeded but 'pickup_hour' column is missing.")
+        raise ValueError("Feature Group read ok but 'pickup_hour' column missing.")
     df = df.copy()
     df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce", utc=True)
     ts = df[df.pickup_hour.between(fetch_data_from, fetch_data_to)]
-    print(f"[store:FG] {len(ts)} rows. Range: {ts['pickup_hour'].min() if not ts.empty else None} .. {ts['pickup_hour'].max() if not ts.empty else None}")
+    print(f"[store:FG] {len(ts)} rows. Range: "
+          f"{ts['pickup_hour'].min() if not ts.empty else None} .. "
+          f"{ts['pickup_hour'].max() if not ts.empty else None}")
     return ts
 
-# ---------- replace your current function with this ----------
+# ---------- Public loader used by app/pipeline ----------
 def load_batch_of_features_from_store(current_date: datetime) -> pd.DataFrame:
     fs = get_feature_store()
-
-    # window the last 29 days up to one hour before current
+    # window: last 29 days up to one hour before now
     fetch_data_to = current_date - timedelta(hours=1)
     fetch_data_from = current_date - timedelta(days=29)
     print(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
 
     ts_data = _read_timeseries_from_store(fs, fetch_data_from, fetch_data_to)
     if ts_data.empty:
-        raise ValueError(
-            "No rows returned from Feature View or Feature Group in the requested window."
-        )
+        raise ValueError("No rows in requested window from FV or FG.")
 
     ts_data = ts_data.sort_values(["pickup_location_id", "pickup_hour"]).reset_index(drop=True)
 
-    # Build 672-hour sliding windows (28 days) with step 1 hour
+    # 28d = 672 hours
     features = transform_ts_data_info_features(
         ts_data,
         feature_col="rides",
-        window_size=24 * 28,   # 672
+        window_size=24 * 28,
         step_size=1,
     )
     if features.empty:
         raise ValueError("Sliding-window transform produced zero rows; check data continuity.")
 
-    # sanity
+    # sanity columns needed by the pipeline
     for c in ["pickup_location_id", "pickup_hour"]:
         if c not in features.columns:
             raise ValueError(f"Missing required column after transform: {c}")
 
     return features
+
+# ---------- (unchanged) model helpers ----------
+def get_model_predictions(model, features: pd.DataFrame) -> pd.DataFrame:
+    if features is None or features.empty:
+        raise ValueError("get_model_predictions: empty features DataFrame")
+
+    # ensure weekly-average transformer inputs exist
+    features = ensure_required_lag_features(
+        features, feature_col="rides",
+        required_lags=REQUIRED_LAGS_FOR_AVG_4W, fill_value=0.0
+    )
+
+    if "pickup_hour" not in features.columns:
+        raise ValueError("get_model_predictions: 'pickup_hour' missing before model.predict")
+
+    if not pd.api.types.is_datetime64_any_dtype(features["pickup_hour"]):
+        features = features.copy()
+        features["pickup_hour"] = pd.to_datetime(features["pickup_hour"], errors="coerce", utc=True)
+
+    preds = model.predict(features)
+    out = pd.DataFrame({
+        "pickup_location_id": features["pickup_location_id"].values,
+        "predicted_demand": pd.Series(preds).round(0),
+    })
+    return out
+
+def load_model_from_registry(version=None):
+    import joblib
+    from src.pipeline_utils import TemporalFeatureEngineer, average_rides_last_4_weeks  # noqa: F401
+    mr = get_hopsworks_project().get_model_registry()
+    model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
+    model_dir = model.download()
+    return joblib.load(Path(model_dir) / "lgb_model.pkl")
+
+def load_metrics_from_registry(version=None):
+    mr = get_hopsworks_project().get_model_registry()
+    model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
+    return model.training_metrics
