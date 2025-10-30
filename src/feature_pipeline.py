@@ -105,7 +105,48 @@ if rides.empty:
 
 logger.info("Transforming raw data into time-series data...")
 ts_data = transform_raw_data_into_ts_data(rides)
-logger.info("Transformation complete. Time-series records: %d, columns: %s", len(ts_data), list(ts_data.columns))
+logger.info(
+    "Transformation complete. Time-series records: %d, columns: %s",
+    len(ts_data),
+    list(ts_data.columns),
+)
+
+# ---- NEW: coerce to the exact schema your Feature Group expects ----
+def coerce_fg_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Hopsworks FG 'time_series_hourly_feature_group_v4' (v1) expects:
+      - pickup_location_id: INT
+      - pickup_hour: TIMESTAMP (tz-aware is fine; Hopsworks stores as UTC)
+      - rides: INT  (not BIGINT)
+    """
+    out = df.copy()
+
+    # Ensure no NaNs in key numeric fields
+    if "rides" in out.columns:
+        out["rides"] = out["rides"].fillna(0)
+
+    if "pickup_location_id" in out.columns:
+        # cast to int32 to avoid bigint
+        out["pickup_location_id"] = pd.to_numeric(out["pickup_location_id"], errors="coerce").fillna(0).astype("int32")
+
+    if "rides" in out.columns:
+        # cast to int32 to satisfy FG schema (int)
+        out["rides"] = pd.to_numeric(out["rides"], errors="coerce").fillna(0).astype("int32")
+
+    if "pickup_hour" in out.columns:
+        # ensure proper datetime64[ns, UTC]
+        if not pd.api.types.is_datetime64_any_dtype(out["pickup_hour"]):
+            out["pickup_hour"] = pd.to_datetime(out["pickup_hour"], errors="coerce", utc=True)
+        else:
+            # make tz-aware UTC
+            if getattr(out["pickup_hour"].dt, "tz", None) is None:
+                out["pickup_hour"] = pd.to_datetime(out["pickup_hour"], utc=True)
+            else:
+                out["pickup_hour"] = out["pickup_hour"].dt.tz_convert("UTC")
+
+    return out
+
+ts_data = coerce_fg_dtypes(ts_data)
 
 try:
     import hopsworks  # type: ignore
@@ -125,7 +166,11 @@ logger.info("Connecting to the feature store...")
 feature_store = project.get_feature_store()
 logger.info("Connected to the feature store.")
 
-logger.info("Connecting to the feature group: %s (version %s)...", config.FEATURE_GROUP_NAME, config.FEATURE_GROUP_VERSION)
+logger.info(
+    "Connecting to the feature group: %s (version %s)...",
+    config.FEATURE_GROUP_NAME,
+    config.FEATURE_GROUP_VERSION,
+)
 feature_group = feature_store.get_feature_group(
     name=config.FEATURE_GROUP_NAME,
     version=config.FEATURE_GROUP_VERSION,
