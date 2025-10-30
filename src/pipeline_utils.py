@@ -71,6 +71,67 @@
 #     )
 #     return pipeline
 
+# import lightgbm as lgb
+# import pandas as pd
+# from sklearn.base import BaseEstimator, TransformerMixin
+# from sklearn.pipeline import make_pipeline
+# from sklearn.preprocessing import FunctionTransformer
+
+# # ---- weekly average feature ----
+# def average_rides_last_4_weeks(X: pd.DataFrame) -> pd.DataFrame:
+#     last_4 = [f"rides_t-{7*24}", f"rides_t-{14*24}", f"rides_t-{21*24}", f"rides_t-{28*24}"]
+#     for col in last_4:
+#         if col not in X.columns:
+#             raise ValueError(f"Missing required column: {col}")
+#     X = X.copy()
+#     X["average_rides_last_4_weeks"] = X[last_4].mean(axis=1)
+#     return X
+
+# add_feature_average_rides_last_4_weeks = FunctionTransformer(
+#     average_rides_last_4_weeks, validate=False
+# )
+
+# # ---- temporal features ----
+# class TemporalFeatureEngineer(BaseEstimator, TransformerMixin):
+#     def fit(self, X, y=None):
+#         return self
+#     def transform(self, X, y=None):
+#         import pandas as pd
+#         X_ = X.copy()
+#         if "pickup_hour" in X_.columns:
+#             if not pd.api.types.is_datetime64_any_dtype(X_["pickup_hour"]):
+#                 X_["pickup_hour"] = pd.to_datetime(X_["pickup_hour"], errors="coerce", utc=True)
+#             X_["hour"] = X_["pickup_hour"].dt.hour
+#             X_["day_of_week"] = X_["pickup_hour"].dt.dayofweek
+#         elif {"hour", "day_of_week"}.issubset(X_.columns):
+#             pass
+#         else:
+#             raise ValueError("TemporalFeatureEngineer needs 'pickup_hour' or both 'hour' and 'day_of_week'.")
+#         return X_.drop(columns=[c for c in ["pickup_hour", "pickup_location_id"] if c in X_])
+
+# add_temporal_features = TemporalFeatureEngineer()
+
+# REQUIRED_LAGS_FOR_AVG_4W = [168, 336, 504, 672]
+
+# def ensure_required_lag_features(
+#     X: pd.DataFrame, feature_col: str = "rides", required_lags=None, fill_value: float = 0.0
+# ) -> pd.DataFrame:
+#     if required_lags is None:
+#         required_lags = REQUIRED_LAGS_FOR_AVG_4W
+#     X = X.copy()
+#     for lag in required_lags:
+#         col = f"{feature_col}_t-{lag}"
+#         if col not in X.columns:
+#             X[col] = fill_value
+#     return X
+
+# def get_pipeline(**hyper_params):
+#     return make_pipeline(
+#         add_feature_average_rides_last_4_weeks,
+#         add_temporal_features,
+#         lgb.LGBMRegressor(**hyper_params),
+#     )
+
 import lightgbm as lgb
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin

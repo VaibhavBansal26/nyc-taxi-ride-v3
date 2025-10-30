@@ -459,139 +459,182 @@
 #     fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
 #     return fg.filter((fg.pickup_hour >= current_hour)).read()
 
+
 from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
 import hopsworks
 import pandas as pd
 from hsfs.feature_store import FeatureStore
 
 import src.config as config
 from src.data_utils import transform_ts_data_info_features
-from src.pipeline_utils import (
-    TemporalFeatureEngineer,
-    average_rides_last_4_weeks,
-    ensure_required_lag_features,
-    REQUIRED_LAGS_FOR_AVG_4W,
-)
 
-# ---- Hopsworks login ----
-def get_hopsworks_project():
+
+# ---------------- Hopsworks basics ----------------
+def get_hopsworks_project() -> hopsworks.project.Project:
     return hopsworks.login(
         project=config.HOPSWORKS_PROJECT_NAME,
         api_key_value=config.HOPSWORKS_API_KEY,
     )
 
+
 def get_feature_store() -> FeatureStore:
     return get_hopsworks_project().get_feature_store()
 
-# ---- Ensure Feature View ----
-def _ensure_feature_view(fs: FeatureStore):
+
+# ---------------- Feature View helpers ----------------
+def ensure_feature_view(fs: FeatureStore):
+    """
+    Ensure the Feature View exists. If not, create it from the Feature Group.
+    Returns the FeatureView object. Raises if creation isn't possible.
+    """
+    # Try to fetch if present
     try:
         return fs.get_feature_view(
             name=config.FEATURE_VIEW_NAME,
             version=config.FEATURE_VIEW_VERSION,
         )
     except Exception:
-        pass
+        pass  # Not there → create it
 
-    try:
-        fg = fs.get_feature_group(
-            name=config.FEATURE_GROUP_NAME,
-            version=config.FEATURE_GROUP_VERSION,
-        )
-        q = fg.select_all()
-        fs.create_feature_view(
-            name=config.FEATURE_VIEW_NAME,
-            version=config.FEATURE_VIEW_VERSION,
-            description="Hourly rides per pickup_location_id",
-            query=q,
-            labels=[],
-        )
-        print(f"[FV] Created {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
-        return fs.get_feature_view(
-            name=config.FEATURE_VIEW_NAME,
-            version=config.FEATURE_VIEW_VERSION,
-        )
-    except Exception as e:
-        print(f"[FV] Could not create FV (fallback to FG): {e}")
-        return None
+    # Create from the Feature Group
+    fg = fs.get_feature_group(
+        name=config.FEATURE_GROUP_NAME,
+        version=config.FEATURE_GROUP_VERSION,
+    )
+    q = fg.select_all()
+    fs.create_feature_view(
+        name=config.FEATURE_VIEW_NAME,
+        version=config.FEATURE_VIEW_VERSION,
+        description="Hourly rides per pickup_location_id",
+        query=q,
+        labels=[],  # inference FV (no label column)
+    )
+    fv = fs.get_feature_view(
+        name=config.FEATURE_VIEW_NAME,
+        version=config.FEATURE_VIEW_VERSION,
+    )
+    print(f"[FV] Created {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
+    return fv
 
-# ---- Read from store ----
-def _read_timeseries_from_store(fs: FeatureStore, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
-    end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
 
-    # Try FV
-    try:
-        fv = _ensure_feature_view(fs)
-        if fv:
-            df = fv.get_batch_data(start_time=start - timedelta(days=1), end_time=end + timedelta(days=1))
-            if "pickup_hour" in df.columns:
-                df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], utc=True, errors="coerce")
-                ts = df[df["pickup_hour"].between(start, end)]
-                if not ts.empty:
-                    print(f"[store:FV] {len(ts)} rows from FV")
-                    return ts
-    except Exception as e:
-        print(f"[store:FV] Error, fallback to FG: {e}")
+def _read_via_feature_view(
+    fs: FeatureStore,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+) -> pd.DataFrame:
+    """
+    Ensure FV exists, read a buffered window, trim to [start_ts, end_ts].
+    pickup_hour returned as UTC tz-aware.
+    """
+    fv = ensure_feature_view(fs)
+    df = fv.get_batch_data(
+        start_time=(start_ts - pd.Timedelta(days=1)),
+        end_time=(end_ts + pd.Timedelta(days=1)),
+    )
+    if "pickup_hour" not in df.columns:
+        raise ValueError("[FV] 'pickup_hour' column missing in Feature View data.")
 
-    # Fallback FG
-    fg = fs.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
-    df = fg.select_all().read()
-    df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], utc=True, errors="coerce")
-    ts = df[df["pickup_hour"].between(start, end)]
-    print(f"[store:FG] {len(ts)} rows from FG")
-    return ts
+    out = df.copy()
+    out["pickup_hour"] = pd.to_datetime(out["pickup_hour"], errors="coerce", utc=True)
+    out = out[out["pickup_hour"].between(start_ts, end_ts)]
+    return out
 
-# ---- Public API ----
+
+# ---------------- Public loader (used by app/pipelines) ----------------
 def load_batch_of_features_from_store(current_date: datetime) -> pd.DataFrame:
+    """
+    Read last 29 days up to 1 hour ago via Feature View (creating it if needed),
+    then build 28-day (672h) sliding-window features with step=1.
+    """
     fs = get_feature_store()
-    now_utc = pd.Timestamp(current_date, tz="UTC")
-    fetch_to = now_utc - timedelta(hours=1)
-    fetch_from = now_utc - timedelta(days=29)
-    print(f"Fetching data {fetch_from} → {fetch_to}")
 
-    ts_data = _read_timeseries_from_store(fs, fetch_from, fetch_to)
+    ts = pd.Timestamp(current_date)
+    current_utc = ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC")
+    fetch_to = current_utc - pd.Timedelta(hours=1)
+    fetch_from = current_utc - pd.Timedelta(days=29)
+    print(f"[inference] FV window {fetch_from} .. {fetch_to}")
+
+    # Read time series via FV (auto-create if missing)
+    ts_data = _read_via_feature_view(fs, fetch_from, fetch_to)
     if ts_data.empty:
-        raise ValueError("No rows available from FV or FG")
+        raise ValueError("[FV] No rows in requested window. Ensure the feature pipeline ingested data.")
 
+    ts_data = ts_data.sort_values(["pickup_location_id", "pickup_hour"]).reset_index(drop=True)
+
+    # Build features expected by the model: 28d window, step=1
     features = transform_ts_data_info_features(
         ts_data,
         feature_col="rides",
-        window_size=24 * 28,
+        window_size=24 * 28,  # 672 hours
         step_size=1,
         tz="America/New_York",
         fill_missing=True,
         fill_value=0.0,
     )
     if features.empty:
-        raise ValueError("Sliding window returned 0 rows")
+        raise ValueError("[FV] Sliding-window transform produced zero rows; check data continuity.")
+
+    # Columns needed downstream
+    for c in ("pickup_location_id", "pickup_hour"):
+        if c not in features.columns:
+            raise ValueError(f"[FV] Missing required column after transform: {c}")
 
     return features
 
-# ---- Model helpers ----
-def get_model_predictions(model, features: pd.DataFrame) -> pd.DataFrame:
-    features = ensure_required_lag_features(
-        features,
-        feature_col="rides",
-        required_lags=REQUIRED_LAGS_FOR_AVG_4W,
-        fill_value=0.0,
-    )
-    preds = model.predict(features)
-    return pd.DataFrame({
-        "pickup_location_id": features["pickup_location_id"].values,
-        "predicted_demand": pd.Series(preds).round(0),
-    })
 
-def load_model_from_registry():
+# ---------------- Model + helpers ----------------
+def get_model_predictions(model, features: pd.DataFrame) -> pd.DataFrame:
+    if features is None or features.empty:
+        raise ValueError("get_model_predictions: empty features DataFrame")
+    if "pickup_hour" not in features.columns:
+        raise ValueError("get_model_predictions: 'pickup_hour' required")
+
+    if not pd.api.types.is_datetime64_any_dtype(features["pickup_hour"]):
+        features = features.copy()
+        features["pickup_hour"] = pd.to_datetime(features["pickup_hour"], errors="coerce", utc=True)
+
+    preds = model.predict(features)
+    return pd.DataFrame(
+        {
+            "pickup_location_id": features["pickup_location_id"].values,
+            "predicted_demand": pd.Series(preds).round(0),
+        }
+    )
+
+
+def load_model_from_registry(version=None):
     import joblib
+    # Ensure custom transformers importable during unpickle
+    from src.pipeline_utils import TemporalFeatureEngineer, average_rides_last_4_weeks  # noqa: F401
+
     mr = get_hopsworks_project().get_model_registry()
     model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
-    path = Path(model.download())
-    return joblib.load(path / "lgb_model.pkl")
+    model_dir = model.download()
+    return joblib.load(Path(model_dir) / "lgb_model.pkl")
 
-def load_metrics_from_registry():
+
+def load_metrics_from_registry(version=None):
     mr = get_hopsworks_project().get_model_registry()
     model = max(mr.get_models(name=config.MODEL_NAME), key=lambda m: m.version)
     return model.training_metrics
+
+
+def fetch_next_hour_predictions():
+    now = datetime.now(timezone.utc)
+    next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+    fs = get_feature_store()
+    fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
+    df = fg.read()
+    return df[df["pickup_hour"] == next_hour]
+
+
+def fetch_predictions(hours: int):
+    current_hour = (pd.Timestamp.now(tz="Etc/UTC") - pd.Timedelta(hours=hours)).floor("h")
+    fs = get_feature_store()
+    fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
+    return fg.filter((fg.pickup_hour >= current_hour)).read()
