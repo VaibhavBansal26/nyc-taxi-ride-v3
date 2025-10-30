@@ -980,19 +980,118 @@ def fill_missing_rides_full_range(df, hour_col, location_col, rides_col):
 
 
 # ---------- Sliding-window feature builder ----------
+# def transform_ts_data_info_features(
+#     df: pd.DataFrame,
+#     feature_col: str = "rides",
+#     window_size: int = 12,
+#     step_size: int = 1,
+#     tz: str = "America/New_York",
+#     fill_missing: bool = True,
+#     fill_value: float | None = 0.0,
+# ) -> pd.DataFrame:
+#     """
+#     Build sliding-window features per pickup_location_id.
+#     Returns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
+#     """
+#     if df is None or not isinstance(df, pd.DataFrame):
+#         raise ValueError("transform_ts_data_info_features: df must be a pandas DataFrame.")
+#     if df.empty:
+#         return pd.DataFrame()
+#     if step_size is None or step_size <= 0:
+#         raise ValueError(f"step_size must be positive; got {step_size}.")
+
+#     required = {"pickup_location_id", "pickup_hour", feature_col}
+#     missing = required - set(df.columns)
+#     if missing:
+#         raise ValueError(f"Input DataFrame missing required columns: {sorted(missing)}")
+
+#     if not pd.api.types.is_datetime64_any_dtype(df["pickup_hour"]):
+#         df = df.copy()
+#         df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce")
+#     if df["pickup_hour"].dt.tz is None:
+#         df["pickup_hour"] = df["pickup_hour"].dt.tz_localize(
+#             tz, nonexistent="shift_forward", ambiguous="NaT"
+#         )
+#     else:
+#         df["pickup_hour"] = df["pickup_hour"].dt.tz_convert(tz)
+
+#     if not pd.api.types.is_numeric_dtype(df[feature_col]):
+#         df = df.copy()
+#         df[feature_col] = pd.to_numeric(df[feature_col], errors="coerce")
+
+#     df = df.dropna(subset=["pickup_hour", feature_col])
+#     df = df.sort_values(["pickup_location_id", "pickup_hour"])
+
+#     transformed_data: List[pd.DataFrame] = []
+#     feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
+#     all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
+
+#     for location_id, g in df.groupby("pickup_location_id", sort=False):
+#         g = g.set_index("pickup_hour").sort_index()
+
+#         if fill_missing and not g.empty:
+#             full_index = pd.date_range(g.index.min(), g.index.max(), freq="H", tz=g.index.tz)
+#             g = g.reindex(full_index)
+#             g["pickup_location_id"] = location_id
+#             if fill_value is not None:
+#                 g[feature_col] = g[feature_col].fillna(fill_value)
+#             else:
+#                 g[feature_col] = g[feature_col].ffill().bfill()
+
+#         g = g.reset_index().rename(columns={"index": "pickup_hour"})
+
+#         values = g[feature_col].to_numpy()
+#         times = g["pickup_hour"].to_numpy()
+
+#         if values.shape[0] < window_size + 1:
+#             continue
+
+#         rows = []
+#         for i in range(0, values.shape[0] - window_size, step_size):
+#             features = values[i : i + window_size]
+#             target_time = times[i + window_size]
+#             row = np.concatenate([features, np.array([location_id, target_time], dtype=object)], axis=0)
+#             rows.append(row)
+
+#         if rows:
+#             transformed_df = pd.DataFrame(rows, columns=all_columns)
+#             transformed_data.append(transformed_df)
+
+#     if not transformed_data:
+#         return pd.DataFrame(columns=all_columns)
+
+#     final_df = pd.concat(transformed_data, ignore_index=True)
+
+#     with pd.option_context("future.no_silent_downcasting", True):
+#         for c in feature_columns:
+#             final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
+#         try:
+#             final_df["pickup_location_id"] = pd.to_numeric(
+#                 final_df["pickup_location_id"], errors="ignore", downcast="integer"
+#             )
+#         except Exception:
+#             pass
+
+#     return final_df
+
+
 def transform_ts_data_info_features(
     df: pd.DataFrame,
     feature_col: str = "rides",
     window_size: int = 12,
     step_size: int = 1,
     tz: str = "America/New_York",
-    fill_missing: bool = True,
-    fill_value: float | None = 0.0,
+    fill_missing: bool = True,       # fill missing hourly buckets per location
+    fill_value: float | None = 0.0,  # set to None to ffill/bfill instead
 ) -> pd.DataFrame:
     """
-    Build sliding-window features per pickup_location_id.
-    Returns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
+    Build sliding-window time-series features per pickup_location_id.
+    Yields columns: <feature_col>_t-<k>, pickup_location_id, pickup_hour (target time).
+
+    - Requires at least (window_size + 1) rows per location to form one window.
+    - If no windows can be built for any location, returns an EMPTY DataFrame.
     """
+    # upfront validation
     if df is None or not isinstance(df, pd.DataFrame):
         raise ValueError("transform_ts_data_info_features: df must be a pandas DataFrame.")
     if df.empty:
@@ -1000,11 +1099,12 @@ def transform_ts_data_info_features(
     if step_size is None or step_size <= 0:
         raise ValueError(f"step_size must be positive; got {step_size}.")
 
-    required = {"pickup_location_id", "pickup_hour", feature_col}
-    missing = required - set(df.columns)
+    required_cols = {"pickup_location_id", "pickup_hour", feature_col}
+    missing = required_cols - set(df.columns)
     if missing:
         raise ValueError(f"Input DataFrame missing required columns: {sorted(missing)}")
 
+    # ensure datetime and tz-aware
     if not pd.api.types.is_datetime64_any_dtype(df["pickup_hour"]):
         df = df.copy()
         df["pickup_hour"] = pd.to_datetime(df["pickup_hour"], errors="coerce")
@@ -1015,20 +1115,26 @@ def transform_ts_data_info_features(
     else:
         df["pickup_hour"] = df["pickup_hour"].dt.tz_convert(tz)
 
+    # ensure numeric feature column
     if not pd.api.types.is_numeric_dtype(df[feature_col]):
         df = df.copy()
         df[feature_col] = pd.to_numeric(df[feature_col], errors="coerce")
 
+    # drop rows with unusable timestamps or features
     df = df.dropna(subset=["pickup_hour", feature_col])
+
+    # sort for deterministic windows
     df = df.sort_values(["pickup_location_id", "pickup_hour"])
 
-    transformed_data: List[pd.DataFrame] = []
+    transformed_data: list[pd.DataFrame] = []
     feature_columns = [f"{feature_col}_t-{window_size - i}" for i in range(window_size)]
     all_columns = feature_columns + ["pickup_location_id", "pickup_hour"]
 
+    # per-location processing
     for location_id, g in df.groupby("pickup_location_id", sort=False):
         g = g.set_index("pickup_hour").sort_index()
 
+        # fill missing hourly buckets (recommended for consistent windows)
         if fill_missing and not g.empty:
             full_index = pd.date_range(g.index.min(), g.index.max(), freq="H", tz=g.index.tz)
             g = g.reindex(full_index)
@@ -1043,6 +1149,7 @@ def transform_ts_data_info_features(
         values = g[feature_col].to_numpy()
         times = g["pickup_hour"].to_numpy()
 
+        # need at least window_size features + 1 target
         if values.shape[0] < window_size + 1:
             continue
 
@@ -1050,7 +1157,9 @@ def transform_ts_data_info_features(
         for i in range(0, values.shape[0] - window_size, step_size):
             features = values[i : i + window_size]
             target_time = times[i + window_size]
-            row = np.concatenate([features, np.array([location_id, target_time], dtype=object)], axis=0)
+            row = np.concatenate(
+                [features, np.array([location_id, target_time], dtype=object)], axis=0
+            )
             rows.append(row)
 
         if rows:
@@ -1062,18 +1171,24 @@ def transform_ts_data_info_features(
 
     final_df = pd.concat(transformed_data, ignore_index=True)
 
-    with pd.option_context("future.no_silent_downcasting", True):
-        for c in feature_columns:
-            final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
-        try:
-            final_df["pickup_location_id"] = pd.to_numeric(
-                final_df["pickup_location_id"], errors="ignore", downcast="integer"
-            )
-        except Exception:
-            pass
+    # explicit casts (no option_context required)
+    for c in feature_columns:
+        final_df[c] = pd.to_numeric(final_df[c], errors="coerce")
+
+    # best-effort int cast for id
+    try:
+        final_df["pickup_location_id"] = pd.to_numeric(
+            final_df["pickup_location_id"], errors="ignore", downcast="integer"
+        )
+    except Exception:
+        pass
+
+    # ensure pickup_hour is datetime tz-aware (it should be already)
+    if not pd.api.types.is_datetime64_any_dtype(final_df["pickup_hour"]):
+        final_df["pickup_hour"] = pd.to_datetime(final_df["pickup_hour"], errors="coerce")
+    # leave timezone as produced above (America/New_York) — downstream normalizes to UTC when needed
 
     return final_df
-
 
 # =========================
 # NEW: helpers your pipeline imports
