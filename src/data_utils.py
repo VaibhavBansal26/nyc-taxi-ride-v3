@@ -1092,37 +1092,74 @@ def _month_year_iter(start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> List[tuple
             m += 1
     return out
 
-
 def fetch_batch_raw_data(start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
     """
-    Month-aware fetch using your TLC parquet flow + monthly filtering.
-    Returns ['pickup_datetime','pickup_location_id'] clipped to [start_ts, end_ts].
+    Month-aware fetch using TLC parquet flow + monthly filtering.
+    If a (year, month) parquet isn't available yet (e.g., current month),
+    fallback to LAST YEAR's same month and shift timestamps +1 year so the data
+    aligns to the requested window.
+
+    Returns ['pickup_datetime','pickup_location_id'] clipped to [start_ts, end_ts] (UTC).
     """
     start_ts = pd.to_datetime(start_ts, utc=True)
     end_ts = pd.to_datetime(end_ts, utc=True)
 
     frames = []
     for year, month in _month_year_iter(start_ts, end_ts):
-        fp = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
-        if not fp.exists():
-            print(f"[fetch_batch_raw_data] downloading {year}-{month:02}")
-            fetch_raw_trip_data(year, month)
-        raw = pd.read_parquet(fp, engine="pyarrow")
-        monthly = filter_nyc_taxi_data(raw, year, month)
+        # Primary target file for this year
+        this_fp = RAW_DATA_DIR / f"rides_{year}_{month:02}.parquet"
+        used_fallback = False
+
+        # Ensure parquet exists locally; download if missing
+        if not this_fp.exists():
+            try:
+                print(f"[fetch_batch_raw_data] downloading {year}-{month:02}")
+                fetch_raw_trip_data(year, month)
+            except Exception as e:
+                # Fallback: last year's same month
+                prev_year = year - 1
+                prev_fp = RAW_DATA_DIR / f"rides_{prev_year}_{month:02}.parquet"
+                if not prev_fp.exists():
+                    print(f"[fetch_batch_raw_data] {year}-{month:02} not available; "
+                          f"downloading fallback {prev_year}-{month:02}")
+                    fetch_raw_trip_data(prev_year, month)
+                this_fp = prev_fp
+                used_fallback = True
+
+        # Load parquet
+        raw = pd.read_parquet(this_fp, engine="pyarrow")
+
+        # Determine which year we actually loaded for filter/shift logic
+        loaded_year = year if not used_fallback else (year - 1)
+
+        # Monthly filter (removes outliers + keeps month scope)
+        monthly = filter_nyc_taxi_data(raw, loaded_year, month)
+
+        # Normalize datetime to UTC
+        if not pd.api.types.is_datetime64_any_dtype(monthly["pickup_datetime"]):
+            monthly["pickup_datetime"] = pd.to_datetime(monthly["pickup_datetime"], errors="coerce", utc=True)
+        else:
+            if getattr(monthly["pickup_datetime"].dt, "tz", None) is None:
+                monthly["pickup_datetime"] = pd.to_datetime(monthly["pickup_datetime"], utc=True)
+
+        # If we used last year's data, shift it +1 year so it aligns into the current window
+        if used_fallback:
+            # Use DateOffset(years=1) to handle leap years cleanly
+            monthly = monthly.copy()
+            monthly["pickup_datetime"] = monthly["pickup_datetime"] + pd.DateOffset(years=1)
+
         frames.append(monthly)
 
     if not frames:
         return pd.DataFrame(columns=["pickup_datetime", "pickup_location_id"])
 
-    combined = pd.concat(frames, ignore_index=True).copy()
-    if not pd.api.types.is_datetime64_any_dtype(combined["pickup_datetime"]):
-        combined["pickup_datetime"] = pd.to_datetime(combined["pickup_datetime"], errors="coerce", utc=True)
-    else:
-        if getattr(combined["pickup_datetime"].dt, "tz", None) is None:
-            combined["pickup_datetime"] = pd.to_datetime(combined["pickup_datetime"], utc=True)
+    combined = pd.concat(frames, ignore_index=True)
 
+    # Final clip to the exact requested window
     mask = (combined["pickup_datetime"] >= start_ts) & (combined["pickup_datetime"] <= end_ts)
-    return combined.loc[mask].reset_index(drop=True)
+    combined = combined.loc[mask].reset_index(drop=True)
+
+    return combined
 
 
 def transform_raw_data_into_ts_data(raw_df: pd.DataFrame) -> pd.DataFrame:
