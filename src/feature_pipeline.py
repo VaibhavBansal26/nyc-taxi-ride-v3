@@ -1,315 +1,70 @@
-# import logging
-# import os
-# import sys
-# from datetime import datetime, timedelta, timezone
+"""Hourly feature pipeline: raw TLC trips -> hourly rides -> Hopsworks feature group.
 
-# import hopsworks
-# import pandas as pd
+Run with ``python -m src.feature_pipeline``.
+"""
 
-# import src.config as config
-# from src.data_utils import fetch_batch_raw_data, transform_raw_data_into_ts_data
-
-# # Configure logging
-# logging.basicConfig(
-#     level=logging.INFO,  # Set the logging level
-#     format="%(asctime)s - %(levelname)s - %(message)s",  # Log format
-#     handlers=[
-#         logging.StreamHandler(sys.stdout),  # Output logs to stdout
-#     ],
-# )
-# logger = logging.getLogger(__name__)
-
-
-# # Step 1: Get the current date and time (timezone-aware)
-# current_date = pd.to_datetime(datetime.now(timezone.utc)).ceil("h")
-# logger.info(f"Current date and time (UTC): {current_date}")
-
-# # Step 2: Define the data fetching range
-# fetch_data_to = current_date
-# fetch_data_from = current_date - timedelta(days=28)
-# logger.info(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
-
-# # Step 3: Fetch raw data
-# logger.info("Fetching raw data...")
-# rides = fetch_batch_raw_data(fetch_data_from, fetch_data_to)
-# logger.info(f"Raw data fetched. Number of records: {len(rides)}")
-
-# # Step 4: Transform raw data into time-series data
-# logger.info("Transforming raw data into time-series data...")
-# ts_data = transform_raw_data_into_ts_data(rides)
-# logger.info(
-#     f"Transformation complete. Number of records in time-series data: {len(ts_data)}"
-# )
-
-# # Step 5: Connect to the Hopsworks project
-# logger.info("Connecting to Hopsworks project...")
-# project = hopsworks.login(
-#     project=config.HOPSWORKS_PROJECT_NAME, api_key_value=config.HOPSWORKS_API_KEY
-# )
-# logger.info("Connected to Hopsworks project.")
-
-# # Step 6: Connect to the feature store
-# logger.info("Connecting to the feature store...")
-# feature_store = project.get_feature_store()
-# logger.info("Connected to the feature store.")
-
-# # Step 7: Connect to or create the feature group
-# logger.info(
-#     f"Connecting to the feature group: {config.FEATURE_GROUP_NAME} (version {config.FEATURE_GROUP_VERSION})..."
-# )
-# feature_group = feature_store.get_feature_group(
-#     name=config.FEATURE_GROUP_NAME,
-#     version=config.FEATURE_GROUP_VERSION,
-# )
-# logger.info("Feature group ready.")
-
-# # Step 8: Insert data into the feature group
-# logger.info("Inserting data into the feature group...")
-# feature_group.insert(ts_data, write_options={"wait_for_job": False})
-# logger.info("Data insertion completed.")
-# from __future__ import annotations
-
-# import logging
-# import sys
-# from datetime import datetime, timedelta, timezone
-
-# import pandas as pd
-# import hopsworks
-
-# import src.config as config
-# from src.data_utils import fetch_batch_raw_data, transform_raw_data_into_ts_data
-
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s - %(levelname)s - %(message)s",
-#     handlers=[logging.StreamHandler(sys.stdout)],
-# )
-# logger = logging.getLogger(__name__)
-
-# current_date = pd.to_datetime(datetime.now(timezone.utc)).ceil("h")
-# logger.info(f"Current date and time (UTC): {current_date}")
-
-# fetch_data_to = current_date
-# fetch_data_from = current_date - timedelta(days=28)
-# logger.info(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
-
-# logger.info("Fetching raw data...")
-# rides = fetch_batch_raw_data(fetch_data_from, fetch_data_to)
-# logger.info(f"Raw data fetched. Number of records: {len(rides)}")
-# if rides.empty:
-#     raise ValueError("feature_pipeline: fetched 0 raw records.")
-
-# logger.info("Transforming raw data into time-series data...")
-# ts_data = transform_raw_data_into_ts_data(rides)
-# logger.info("Transformation complete. Time-series records: %d, columns: %s", len(ts_data), list(ts_data.columns))
-
-# # Coerce dtypes to match FG schema
-# def coerce_fg_dtypes(df: pd.DataFrame) -> pd.DataFrame:
-#     out = df.copy()
-#     out["pickup_location_id"] = pd.to_numeric(out["pickup_location_id"], errors="coerce").fillna(0).astype("int32")
-#     if not pd.api.types.is_datetime64_any_dtype(out["pickup_hour"]):
-#         out["pickup_hour"] = pd.to_datetime(out["pickup_hour"], errors="coerce", utc=True)
-#     else:
-#         if getattr(out["pickup_hour"].dt, "tz", None) is None:
-#             out["pickup_hour"] = pd.to_datetime(out["pickup_hour"], utc=True)
-#         else:
-#             out["pickup_hour"] = out["pickup_hour"].dt.tz_convert("UTC")
-#     out["rides"] = pd.to_numeric(out["rides"], errors="coerce").fillna(0).astype("int32")
-#     return out
-
-# ts_data = coerce_fg_dtypes(ts_data)
-
-# logger.info("Connecting to Hopsworks project...")
-# project = hopsworks.login(project=config.HOPSWORKS_PROJECT_NAME, api_key_value=config.HOPSWORKS_API_KEY)
-# logger.info("Connected to Hopsworks project.")
-
-# logger.info("Connecting to the feature store...")
-# feature_store = project.get_feature_store()
-# logger.info("Connected to the feature store.")
-
-# logger.info("Connecting to the feature group: %s (version %s)...", config.FEATURE_GROUP_NAME, config.FEATURE_GROUP_VERSION)
-# feature_group = feature_store.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
-# logger.info("Feature group ready.")
-
-# missing = {"pickup_location_id", "pickup_hour", "rides"} - set(ts_data.columns)
-# if missing:
-#     raise ValueError(f"feature_pipeline: ts_data missing required columns {sorted(missing)}")
-
-# logger.info("Inserting data into the feature group...")
-# feature_group.insert(ts_data, write_options={"wait_for_job": False})
-# logger.info("Data insertion completed.")
-
-# src/feature_pipeline.py
-# from __future__ import annotations
-
-# import logging
-# import sys
-# from datetime import datetime, timedelta, timezone
-
-# import hopsworks
-# import pandas as pd
-
-# import src.config as config
-# from src.data_utils import fetch_batch_raw_data, transform_raw_data_into_ts_data
-# from src.inference import ensure_feature_view  # reuse the same helper
-
-
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s - %(levelname)s - %(message)s",
-#     handlers=[logging.StreamHandler(sys.stdout)],
-# )
-# log = logging.getLogger(__name__)
-
-# current_date = pd.to_datetime(datetime.now(timezone.utc)).ceil("h")
-# log.info(f"Current date and time (UTC): {current_date}")
-
-# fetch_data_to = current_date
-# fetch_data_from = current_date - timedelta(days=28)
-# log.info(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
-
-# log.info("Fetching raw data...")
-# rides = fetch_batch_raw_data(fetch_data_from, fetch_data_to)
-# log.info(f"Raw data fetched. Number of records: {len(rides)}")
-
-# log.info("Transforming raw data into time-series data...")
-# ts_data = transform_raw_data_into_ts_data(rides)
-# log.info(f"Transformation complete. Time-series records: {len(ts_data)}; columns: {list(ts_data.columns)}")
-
-# log.info("Connecting to Hopsworks project...")
-# project = hopsworks.login(project=config.HOPSWORKS_PROJECT_NAME, api_key_value=config.HOPSWORKS_API_KEY)
-# log.info("Connected to Hopsworks project.")
-
-# log.info("Connecting to the feature store...")
-# fs = project.get_feature_store()
-# log.info("Connected to the feature store.")
-
-# log.info(f"Getting FG: {config.FEATURE_GROUP_NAME} v{config.FEATURE_GROUP_VERSION} ...")
-# fg = fs.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
-
-# log.info("Inserting hourly TS into FG...")
-# fg.insert(ts_data, write_options={"wait_for_job": False})
-# log.info("Insert submitted.")
-
-# # Ensure FV exists right after ingestion (idempotent)
-# try:
-#     ensure_feature_view(fs)
-#     log.info(f"Feature View ensured: {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
-# except Exception as e:
-#     log.warning(f"Could not ensure Feature View (will rely on FG in the meantime): {e}")
-
-# from __future__ import annotations
-
-# import logging
-# import sys
-# from datetime import datetime, timedelta, timezone
-
-# import hopsworks
-# import pandas as pd
-
-# import src.config as config
-# from src.data_utils import fetch_batch_raw_data, transform_raw_data_into_ts_data
-# from src.inference import ensure_feature_view  # reuse the same helper
-
-
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s - %(levelname)s - %(message)s",
-#     handlers=[logging.StreamHandler(sys.stdout)],
-# )
-# log = logging.getLogger(__name__)
-
-# current_date = pd.to_datetime(datetime.now(timezone.utc)).ceil("h")
-# log.info(f"Current date and time (UTC): {current_date}")
-
-# fetch_data_to = current_date
-# fetch_data_from = current_date - timedelta(days=28)
-# log.info(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
-
-# log.info("Fetching raw data...")
-# rides = fetch_batch_raw_data(fetch_data_from, fetch_data_to)
-# log.info(f"Raw data fetched. Number of records: {len(rides)}")
-
-# log.info("Transforming raw data into time-series data...")
-# ts_data = transform_raw_data_into_ts_data(rides)
-# log.info(f"Transformation complete. Time-series records: {len(ts_data)}; columns: {list(ts_data.columns)}")
-
-# log.info("Connecting to Hopsworks project...")
-# project = hopsworks.login(project=config.HOPSWORKS_PROJECT_NAME, api_key_value=config.HOPSWORKS_API_KEY)
-# log.info("Connected to Hopsworks project.")
-
-# log.info("Connecting to the feature store...")
-# fs = project.get_feature_store()
-# log.info("Connected to the feature store.")
-
-# log.info(f"Getting FG: {config.FEATURE_GROUP_NAME} v{config.FEATURE_GROUP_VERSION} ...")
-# fg = fs.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
-
-# log.info("Inserting hourly TS into FG...")
-# fg.insert(ts_data, write_options={"wait_for_job": False})
-# log.info("Insert submitted.")
-
-# # Ensure FV exists right after ingestion (idempotent)
-# try:
-#     ensure_feature_view(fs)
-#     log.info(f"Feature View ensured: {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
-# except Exception as e:
-#     log.warning(f"Could not ensure Feature View (will rely on FG in the meantime): {e}")
-# src/feature_pipeline.py
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
 
-import hopsworks
 import pandas as pd
 
 import src.config as config
 from src.data_utils import fetch_batch_raw_data, transform_raw_data_into_ts_data
-from src.inference import ensure_feature_view  # reuse the same helper
-
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)]
 )
 log = logging.getLogger(__name__)
 
-current_date = pd.to_datetime(datetime.now(timezone.utc)).ceil("h")
-log.info(f"Current date and time (UTC): {current_date}")
 
-fetch_data_to = current_date
-fetch_data_from = current_date - timedelta(days=28)
-log.info(f"Fetching data from {fetch_data_from} to {fetch_data_to}")
+def build_hourly_rides(
+    now: pd.Timestamp | None = None, lookback_days: int = config.FEATURE_PIPELINE_LOOKBACK_DAYS
+) -> pd.DataFrame:
+    current = (now or pd.Timestamp.now(tz="UTC")).ceil("h")
+    fetch_from = current - pd.Timedelta(days=lookback_days)
+    log.info("Fetching raw trips %s .. %s", fetch_from, current)
+    rides = fetch_batch_raw_data(fetch_from, current)
+    log.info("Raw trips: %d rows", len(rides))
+    ts_data = transform_raw_data_into_ts_data(rides)
+    log.info(
+        "Hourly rides: %d rows over %d zones",
+        len(ts_data),
+        ts_data["pickup_location_id"].nunique() if len(ts_data) else 0,
+    )
+    return ts_data
 
-log.info("Fetching raw data...")
-rides = fetch_batch_raw_data(fetch_data_from, fetch_data_to)
-log.info(f"Raw data fetched. Number of records: {len(rides)}")
 
-log.info("Transforming raw data into time-series data...")
-ts_data = transform_raw_data_into_ts_data(rides)
-log.info(f"Transformation complete. Time-series records: {len(ts_data)}; columns: {list(ts_data.columns)}")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Compute hourly rides and push them to Hopsworks")
+    parser.add_argument("--dry-run", action="store_true", help="build features but do not write to Hopsworks")
+    parser.add_argument("--lookback-days", type=int, default=config.FEATURE_PIPELINE_LOOKBACK_DAYS)
+    args = parser.parse_args(argv)
 
-log.info("Connecting to Hopsworks project...")
-project = hopsworks.login(project=config.HOPSWORKS_PROJECT_NAME, api_key_value=config.HOPSWORKS_API_KEY)
-log.info("Connected to Hopsworks project.")
+    ts_data = build_hourly_rides(lookback_days=args.lookback_days)
+    if ts_data.empty:
+        log.error("No hourly rides produced; aborting")
+        return 1
+    if args.dry_run:
+        log.info("Dry run - skipping Hopsworks insert. Sample:\n%s", ts_data.tail().to_string())
+        return 0
 
-log.info("Connecting to the feature store...")
-fs = project.get_feature_store()
-log.info("Connected to the feature store.")
+    from src.inference import ensure_feature_view, get_feature_store, get_rides_feature_group
 
-log.info(f"Getting FG: {config.FEATURE_GROUP_NAME} v{config.FEATURE_GROUP_VERSION} ...")
-fg = fs.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
+    fs = get_feature_store()
+    fg = get_rides_feature_group(fs)
+    log.info("Inserting into %s v%s ...", config.FEATURE_GROUP_NAME, config.FEATURE_GROUP_VERSION)
+    fg.insert(ts_data, write_options={"wait_for_job": False})
+    log.info("Insert submitted.")
+    try:
+        ensure_feature_view(fs)
+        log.info("Feature view %s v%s ready", config.FEATURE_VIEW_NAME, config.FEATURE_VIEW_VERSION)
+    except Exception as exc:
+        log.warning("Could not ensure feature view: %s", exc)
+    return 0
 
-log.info("Inserting hourly TS into FG...")
-fg.insert(ts_data, write_options={"wait_for_job": False})
-log.info("Insert submitted.")
 
-# Ensure FV exists right after ingestion (idempotent)
-try:
-    ensure_feature_view(fs)
-    log.info(f"Feature View ensured: {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
-except Exception as e:
-    log.warning(f"Could not ensure Feature View (will rely on FG in the meantime): {e}")
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -182,3 +182,14 @@ pyrightconfig.json
 .env
 data/*
 models/*
+### Project-specific ###
+.venv/
+.vscode/
+.idea/
+.DS_Store
+data/*
+!data/sample/
+!data/sample/*.parquet
+models/*
+!models/lgb_model.pkl
+notebooks/*.html

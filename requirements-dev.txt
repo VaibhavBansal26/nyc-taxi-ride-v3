@@ -1,0 +1,11 @@
+# Tests, linting and the research notebooks
+-r requirements.txt
+pytest>=8
+ruff>=0.6
+jupyter
+notebook
+matplotlib
+seaborn
+ipywidgets
+xgboost
+mlflow
