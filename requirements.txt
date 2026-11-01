@@ -1,23 +1,8 @@
-pandas
-notebook
-matplotlib
-pyarrow
-requests
-numpy
-seaborn
-jupyter
-pyarrow
-plotly
-lightgbm
-xgboost
-confluent-kafka==2.8.0
-folium
-geopandas
-hopsworks==4.2.*
-ipywidgets
-mlflow
-numpy<1.24
-python-dotenv
-scikit-learn==1.5.2
-streamlit
-streamlit-folium
+# Streamlit app (also what Streamlit Community Cloud installs)
+-r requirements-pipelines.txt
+streamlit>=1.40
+streamlit-folium>=0.20
+folium>=0.17
+branca>=0.7
+geopandas>=1.0
+plotly>=5.20
