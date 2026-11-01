@@ -11,7 +11,7 @@ prediction data live in a Hopsworks feature store, and a Streamlit app shows the
 | Stack | |
 |---|---|
 | Data | NYC TLC yellow-taxi trip records (parquet, monthly) |
-| Feature store / registry | Hopsworks (serverless) |
+| Feature store / registry | Hopsworks serverless (`eu-west.cloud.hopsworks.ai`), SDK 5.x |
 | Model | scikit-learn pipeline + LightGBM regressor |
 | Orchestration | GitHub Actions (hourly features, hourly inference, weekly retraining) |
 | App | Streamlit + Folium + Plotly |
@@ -73,14 +73,16 @@ Open http://localhost:8501. Without an API key the app starts in demo mode.
 3. Bootstrap the store once:
 
 ```bash
-python -m src.feature_pipeline            # creates/updates the hourly rides feature group
-python -m pipelines.ensure_feature_view   # creates the feature view
-python -m pipelines.model_training_pipeline --force   # trains on what is in the store and registers v1
-python -m pipelines.inference_pipeline    # writes the first predictions
+python -m src.feature_pipeline --lookback-days 60 --wait      # creates the feature group + view, loads 60 days
+python -m pipelines.model_training_pipeline --register-local  # registers the bundled model as v1 (fast)
+python -m pipelines.inference_pipeline --backfill-hours 48    # next-hour predictions + 48 h of history for monitoring
 ```
 
-Every pipeline accepts `--dry-run` (compute but do not write) and the inference pipeline accepts `--local-model` to
-use `models/lgb_model.pkl` instead of the registry. Once secrets are in place the GitHub workflows take over:
+Flags worth knowing: every pipeline accepts `--dry-run` (compute but do not write); the feature pipeline has
+`--lookback-days` and `--wait` (block until Hopsworks materialises the insert); training has `--force`,
+`--days` and `--register-local`; inference has `--local-model` (use `models/lgb_model.pkl` instead of the registry)
+and `--backfill-hours N` (regenerate the last N hours, e.g. after an outage). Once secrets are in place the GitHub
+workflows take over:
 
 | Workflow | Trigger |
 |---|---|

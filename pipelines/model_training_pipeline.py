@@ -70,12 +70,47 @@ def register(pipeline, mae: float, features: pd.DataFrame, targets: pd.Series) -
     log.info("Registered %s version %s", config.MODEL_NAME, model.version)
 
 
+def register_local_model(days: int, dry_run: bool = False) -> int:
+    """Bootstrap helper: register the bundled model, scored on whatever the store holds."""
+    from src.inference import load_local_model
+
+    pipeline = load_local_model()
+    ts_data = fetch_days_data(days)
+    features, targets = transform_ts_data_info_features_and_target(
+        ts_data, window_size=config.WINDOW_SIZE, step_size=23
+    )
+    if features.empty:
+        log.warning(
+            "Store holds fewer than %d hours; scoring the bundled model on the demo sample instead",
+            config.WINDOW_SIZE + 1,
+        )
+        from src.demo import replay_sample
+
+        features, targets = transform_ts_data_info_features_and_target(
+            replay_sample(pd.Timestamp.now(tz="UTC")), window_size=config.WINDOW_SIZE, step_size=23
+        )
+    mae = mean_absolute_error(targets, pipeline.predict(features))
+    log.info("Bundled model MAE on %d windows: %.4f", len(features), mae)
+    if dry_run:
+        return 0
+    register(pipeline, mae, features, targets)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Retrain the next-hour demand model")
     parser.add_argument("--dry-run", action="store_true", help="train and evaluate but never register")
     parser.add_argument("--days", type=int, default=config.TRAINING_LOOKBACK_DAYS)
     parser.add_argument("--force", action="store_true", help="register even if not better than the current model")
+    parser.add_argument(
+        "--register-local",
+        action="store_true",
+        help="skip training: evaluate models/lgb_model.pkl on the available data and register it (bootstrap)",
+    )
     args = parser.parse_args(argv)
+
+    if args.register_local:
+        return register_local_model(args.days, dry_run=args.dry_run)
 
     log.info("Fetching %d days of hourly rides ...", args.days)
     ts_data = fetch_days_data(args.days)

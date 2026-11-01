@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compute hourly rides and push them to Hopsworks")
     parser.add_argument("--dry-run", action="store_true", help="build features but do not write to Hopsworks")
     parser.add_argument("--lookback-days", type=int, default=config.FEATURE_PIPELINE_LOOKBACK_DAYS)
+    parser.add_argument("--wait", action="store_true", help="wait for the Hopsworks materialisation job to finish")
     args = parser.parse_args(argv)
 
     ts_data = build_hourly_rides(lookback_days=args.lookback_days)
@@ -54,10 +55,10 @@ def main(argv: list[str] | None = None) -> int:
     from src.inference import ensure_feature_view, get_feature_store, get_rides_feature_group
 
     fs = get_feature_store()
-    fg = get_rides_feature_group(fs)
+    fg = get_rides_feature_group(fs, create=True)
     log.info("Inserting into %s v%s ...", config.FEATURE_GROUP_NAME, config.FEATURE_GROUP_VERSION)
-    fg.insert(ts_data, write_options={"wait_for_job": False})
-    log.info("Insert submitted.")
+    fg.insert(ts_data, write_options={"wait_for_job": args.wait})
+    log.info("Insert %s.", "materialised" if args.wait else "submitted")
     try:
         ensure_feature_view(fs)
         log.info("Feature view %s v%s ready", config.FEATURE_VIEW_NAME, config.FEATURE_VIEW_VERSION)
