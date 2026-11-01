@@ -91,6 +91,43 @@ workflows take over:
 | `model_training_pipeline.yaml` | Mondays 00:00 UTC |
 | `ci.yaml` | every push / PR - ruff + pytest |
 
+## Deployment
+
+| Piece | Where it runs | How it gets there |
+|---|---|---|
+| Hourly features, hourly inference, weekly training | GitHub Actions (`.github/workflows/`) | run on schedule once the two secrets below exist |
+| Feature groups, feature view, model registry, predictions | Hopsworks serverless, project `nyc_taxi_demand` | created by the bootstrap commands above |
+| Streamlit app | Streamlit Community Cloud, deployed from `main` with main file `frontend/app.py` | rebuilds automatically on every push to `main` |
+
+### GitHub Actions secrets
+
+```bash
+grep '^HOPSWORKS_API_KEY=' .env | cut -d= -f2- | gh secret set HOPSWORKS_API_KEY
+```
+
+```bash
+printf 'nyc_taxi_demand' | gh secret set HOPSWORKS_PROJECT_NAME
+```
+
+Trigger a first run with `gh workflow run taxi_rides_hourly_features_pipeline`; the inference workflow follows
+automatically when it succeeds.
+
+### Streamlit Community Cloud
+
+1. On [share.streamlit.io](https://share.streamlit.io) open the app, then **Settings → Secrets** and paste:
+
+   ```toml
+   HOPSWORKS_API_KEY = "<the key from .env>"
+   HOPSWORKS_PROJECT_NAME = "nyc_taxi_demand"
+   ```
+
+   Streamlit exposes top-level secrets as environment variables, which is how `src/config.py` reads them.
+2. In **Settings → General** choose **Python 3.12**.
+3. Push (or merge) to `main`; if the app does not rebuild by itself use **Reboot app**. Without the secrets the
+   app still works, in demo mode.
+
+The live mode caches reads for 5 minutes, so predictions appear a few minutes after each hourly inference run.
+
 ## Project layout
 
 ```
