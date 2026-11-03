@@ -11,7 +11,7 @@ prediction data live in a Hopsworks feature store, and a Streamlit app shows the
 | Stack | |
 |---|---|
 | Data | NYC TLC yellow-taxi trip records (parquet, monthly) |
-| Feature store / registry | Hopsworks (serverless) |
+| Feature store / registry | Hopsworks serverless (`eu-west.cloud.hopsworks.ai`), SDK 5.x |
 | Model | scikit-learn pipeline + LightGBM regressor |
 | Orchestration | GitHub Actions (hourly features, hourly inference, weekly retraining) |
 | App | Streamlit + Folium + Plotly |
@@ -73,14 +73,16 @@ Open http://localhost:8501. Without an API key the app starts in demo mode.
 3. Bootstrap the store once:
 
 ```bash
-python -m src.feature_pipeline            # creates/updates the hourly rides feature group
-python -m pipelines.ensure_feature_view   # creates the feature view
-python -m pipelines.model_training_pipeline --force   # trains on what is in the store and registers v1
-python -m pipelines.inference_pipeline    # writes the first predictions
+python -m src.feature_pipeline --lookback-days 60 --wait      # creates the feature group + view, loads 60 days
+python -m pipelines.model_training_pipeline --register-local  # registers the bundled model as v1 (fast)
+python -m pipelines.inference_pipeline --backfill-hours 48    # next-hour predictions + 48 h of history for monitoring
 ```
 
-Every pipeline accepts `--dry-run` (compute but do not write) and the inference pipeline accepts `--local-model` to
-use `models/lgb_model.pkl` instead of the registry. Once secrets are in place the GitHub workflows take over:
+Flags worth knowing: every pipeline accepts `--dry-run` (compute but do not write); the feature pipeline has
+`--lookback-days` and `--wait` (block until Hopsworks materialises the insert); training has `--force`,
+`--days` and `--register-local`; inference has `--local-model` (use `models/lgb_model.pkl` instead of the registry)
+and `--backfill-hours N` (regenerate the last N hours, e.g. after an outage). Once secrets are in place the GitHub
+workflows take over:
 
 | Workflow | Trigger |
 |---|---|
@@ -88,6 +90,43 @@ use `models/lgb_model.pkl` instead of the registry. Once secrets are in place th
 | `inference_pipeline.yaml` | after a successful feature run |
 | `model_training_pipeline.yaml` | Mondays 00:00 UTC |
 | `ci.yaml` | every push / PR - ruff + pytest |
+
+## Deployment
+
+| Piece | Where it runs | How it gets there |
+|---|---|---|
+| Hourly features, hourly inference, weekly training | GitHub Actions (`.github/workflows/`) | run on schedule once the two secrets below exist |
+| Feature groups, feature view, model registry, predictions | Hopsworks serverless, project `nyc_taxi_demand` | created by the bootstrap commands above |
+| Streamlit app | Streamlit Community Cloud, deployed from `main` with main file `frontend/app.py` | rebuilds automatically on every push to `main` |
+
+### GitHub Actions secrets
+
+```bash
+grep '^HOPSWORKS_API_KEY=' .env | cut -d= -f2- | gh secret set HOPSWORKS_API_KEY
+```
+
+```bash
+printf 'nyc_taxi_demand' | gh secret set HOPSWORKS_PROJECT_NAME
+```
+
+Trigger a first run with `gh workflow run taxi_rides_hourly_features_pipeline`; the inference workflow follows
+automatically when it succeeds.
+
+### Streamlit Community Cloud
+
+1. On [share.streamlit.io](https://share.streamlit.io) open the app, then **Settings → Secrets** and paste:
+
+   ```toml
+   HOPSWORKS_API_KEY = "<the key from .env>"
+   HOPSWORKS_PROJECT_NAME = "nyc_taxi_demand"
+   ```
+
+   Streamlit exposes top-level secrets as environment variables, which is how `src/config.py` reads them.
+2. In **Settings → General** choose **Python 3.12**.
+3. Push (or merge) to `main`; if the app does not rebuild by itself use **Reboot app**. Without the secrets the
+   app still works, in demo mode.
+
+The live mode caches reads for 5 minutes, so predictions appear a few minutes after each hourly inference run.
 
 ## Project layout
 

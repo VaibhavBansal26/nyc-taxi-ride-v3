@@ -38,8 +38,17 @@ def get_feature_store():
     return get_hopsworks_project().get_feature_store()
 
 
-def get_rides_feature_group(fs=None):
+def get_rides_feature_group(fs=None, create: bool = False):
     fs = fs or get_feature_store()
+    if create:
+        return fs.get_or_create_feature_group(
+            name=config.FEATURE_GROUP_NAME,
+            version=config.FEATURE_GROUP_VERSION,
+            description="Hourly yellow-taxi pickups per TLC zone",
+            primary_key=["pickup_location_id", "pickup_hour"],
+            event_time="pickup_hour",
+            online_enabled=False,
+        )
     return fs.get_feature_group(name=config.FEATURE_GROUP_NAME, version=config.FEATURE_GROUP_VERSION)
 
 
@@ -62,9 +71,11 @@ def ensure_feature_view(fs=None):
     """Return the feature view, creating it from the feature group if missing."""
     fs = fs or get_feature_store()
     try:
-        return fs.get_feature_view(name=config.FEATURE_VIEW_NAME, version=config.FEATURE_VIEW_VERSION)
-    except Exception:
-        pass
+        fv = fs.get_feature_view(name=config.FEATURE_VIEW_NAME, version=config.FEATURE_VIEW_VERSION)
+    except Exception:  # older SDKs raise when the view is missing, newer ones return None
+        fv = None
+    if fv is not None:
+        return fv
     fg = get_rides_feature_group(fs)
     fs.create_feature_view(
         name=config.FEATURE_VIEW_NAME,
@@ -74,7 +85,10 @@ def ensure_feature_view(fs=None):
         labels=[],
     )
     print(f"[FV] Created {config.FEATURE_VIEW_NAME} v{config.FEATURE_VIEW_VERSION}")
-    return fs.get_feature_view(name=config.FEATURE_VIEW_NAME, version=config.FEATURE_VIEW_VERSION)
+    fv = fs.get_feature_view(name=config.FEATURE_VIEW_NAME, version=config.FEATURE_VIEW_VERSION)
+    if fv is None:
+        raise RuntimeError(f"Feature view {config.FEATURE_VIEW_NAME} could not be created")
+    return fv
 
 
 # --------------------------------------------------------------------------- reads
@@ -134,6 +148,21 @@ def load_batch_of_features_from_store(current_date: datetime | pd.Timestamp | No
     if features.empty:
         raise ValueError("Sliding-window transform produced zero rows; check data continuity.")
     return features
+
+
+def load_backfill_features(hours: int, current_date: datetime | pd.Timestamp | None = None) -> pd.DataFrame:
+    """One feature row per location **per hour** for the last ``hours`` target hours (plus the next one)."""
+    from src.data_utils import transform_ts_data_info_features
+
+    target_hour = _utc(current_date or pd.Timestamp.now(tz="UTC")).ceil("h")
+    first_target = target_hour - pd.Timedelta(hours=hours)
+    fetch_from = first_target - pd.Timedelta(hours=config.WINDOW_SIZE)
+    ts_data = read_hourly_rides(fetch_from, target_hour - pd.Timedelta(hours=1))
+    if ts_data.empty:
+        raise ValueError("No rows in the feature store for the backfill window.")
+    features = transform_ts_data_info_features(ts_data, step_size=1)
+    keep = pd.to_datetime(features["pickup_hour"], utc=True) >= first_target
+    return features[keep].reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------- model
